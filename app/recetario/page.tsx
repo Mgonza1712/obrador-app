@@ -35,12 +35,12 @@ export default async function RecetarioPage() {
     const recetas = recipes ?? []
 
     return (
-        <div className="flex h-screen overflow-hidden bg-background">
+        <div className="flex flex-col md:flex-row h-screen overflow-hidden bg-background">
             <Sidebar />
-            <main className="flex flex-1 flex-col overflow-y-auto">
+            <main className="flex flex-1 flex-col overflow-y-auto pb-16 md:pb-0">
 
                 {/* Header */}
-                <div className="border-b border-border bg-background/80 px-8 py-6 backdrop-blur">
+                <div className="border-b border-border bg-background/80 px-4 py-4 md:px-8 md:py-6 backdrop-blur">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -65,7 +65,7 @@ export default async function RecetarioPage() {
                 </div>
 
                 {/* Content */}
-                <div className="p-8">
+                <div className="p-4 md:p-8">
                     {recetas.length === 0 ? (
                         /* Estado vacío */
                         <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">

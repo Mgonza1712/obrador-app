@@ -46,12 +46,12 @@ export default async function EditarRecetaPage({
     if (error || !receta) notFound()
 
     return (
-        <div className="flex h-screen overflow-hidden bg-background">
+        <div className="flex flex-col md:flex-row h-screen overflow-hidden bg-background">
             <Sidebar />
-            <main className="flex flex-1 flex-col overflow-y-auto">
+            <main className="flex flex-1 flex-col overflow-y-auto pb-16 md:pb-0">
 
                 {/* Header */}
-                <div className="border-b border-border bg-background/80 px-8 py-5 backdrop-blur">
+                <div className="border-b border-border bg-background/80 px-4 py-4 md:px-8 md:py-5 backdrop-blur">
                     <Link
                         href={`/recetario/${id}`}
                         className="mb-3 flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -71,7 +71,7 @@ export default async function EditarRecetaPage({
                 </div>
 
                 {/* Form */}
-                <div className="flex flex-1 justify-center p-8">
+                <div className="flex flex-1 justify-center p-4 md:p-8">
                     <div className="w-full max-w-2xl">
                         <form action={updateRecipe} className="flex flex-col gap-6">
                             {/* Campo oculto con el id de la receta */}
@@ -90,7 +90,7 @@ export default async function EditarRecetaPage({
                                         placeholder="Ej: Salsa Fileto…"
                                         defaultValue={receta.title}
                                     />
-                                    <div className="grid grid-cols-2 gap-4">
+                                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                         <Field
                                             label="Tiempo de preparación (min)"
                                             name="prep_time_minutes"

@@ -79,18 +79,18 @@ export default async function DashboardPage() {
   ]
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex flex-col md:flex-row h-screen overflow-hidden bg-background">
       <Sidebar />
-      <main className="flex flex-1 flex-col overflow-y-auto">
+      <main className="flex flex-1 flex-col overflow-y-auto pb-16 md:pb-0">
 
         {/* ── Hero header ── */}
-        <div className="border-b border-border bg-background/80 px-8 py-8 backdrop-blur">
+        <div className="border-b border-border bg-background/80 px-4 py-5 md:px-8 md:py-8 backdrop-blur">
           <p className="mb-1 text-sm font-medium text-muted-foreground">
             Bienvenido de nuevo, <span className="text-foreground font-semibold">{emailLabel}</span> 👋
           </p>
           <div className="flex items-end gap-3">
             <Zap className="mb-1 h-8 w-8 text-amber-500" />
-            <h1 className="text-4xl font-extrabold tracking-tighter text-foreground lg:text-5xl">
+            <h1 className="text-2xl font-extrabold tracking-tighter text-foreground md:text-4xl lg:text-5xl">
               Cerebro del{' '}
               <span className="bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 bg-clip-text text-transparent">
                 Obrador
@@ -102,14 +102,14 @@ export default async function DashboardPage() {
           </p>
         </div>
 
-        <div className="flex flex-col gap-8 p-8">
+        <div className="flex flex-col gap-6 p-4 md:gap-8 md:p-8">
 
           {/* ── KPI Cards ── */}
           <section>
             <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
               Vista General
             </h2>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               {kpis.map(({ label, value, icon: Icon, color, bg, href, badge }) => (
                 <Card
                   key={label}

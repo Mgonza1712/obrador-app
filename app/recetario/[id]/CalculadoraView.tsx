@@ -126,12 +126,12 @@ export default function CalculadoraView({
         : []
 
     return (
-        <div className="flex h-screen overflow-hidden bg-background">
+        <div className="flex flex-col md:flex-row h-screen overflow-hidden bg-background">
             <Sidebar />
-            <main className="flex flex-1 flex-col overflow-y-auto">
+            <main className="flex flex-1 flex-col overflow-y-auto pb-16 md:pb-0">
 
                 {/* ── Header ── */}
-                <div className="border-b border-border bg-background/80 px-8 py-5 backdrop-blur">
+                <div className="border-b border-border bg-background/80 px-4 py-4 md:px-8 md:py-5 backdrop-blur">
                     <Link
                         href="/recetario"
                         className="mb-3 flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -195,7 +195,7 @@ export default function CalculadoraView({
                     </div>
                 </div>
 
-                <div className="grid flex-1 grid-cols-1 gap-6 p-8 lg:grid-cols-2">
+                <div className="grid flex-1 grid-cols-1 gap-4 p-4 md:gap-6 md:p-6 lg:grid-cols-2">
 
                     {/* ── Calculadora ── */}
                     <Card className={`h-fit border-border shadow-sm transition-opacity duration-200 ${isEditing ? 'opacity-40 pointer-events-none' : ''}`}>

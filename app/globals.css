@@ -124,3 +124,25 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ── Responsive nav: garantizado con media queries explícitas ── */
+
+/* En móvil (< 768px): ocultar sidebar lateral, mostrar bottom-nav */
+@media (max-width: 767px) {
+  .sidebar-desktop {
+    display: none !important;
+  }
+  .sidebar-mobile {
+    display: flex !important;
+  }
+}
+
+/* En tablet/desktop (≥ 768px): mostrar sidebar lateral, ocultar bottom-nav */
+@media (min-width: 768px) {
+  .sidebar-desktop {
+    display: flex !important;
+  }
+  .sidebar-mobile {
+    display: none !important;
+  }
+}
