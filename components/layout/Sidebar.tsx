@@ -40,7 +40,7 @@ export default function Sidebar() {
         <>
             {/* ── Desktop Sidebar — oculto en móvil con max-md:hidden ── */}
             <aside
-                className="sidebar-desktop max-md:hidden flex h-screen w-56 shrink-0 flex-col border-r border-border bg-background px-3 py-6"
+                className="sidebar-desktop max-md:hidden sticky top-0 flex h-screen w-56 shrink-0 flex-col justify-between overflow-hidden border-r border-border bg-background px-3 py-6"
             >
                 {/* Logo */}
                 <div className="mb-8 px-3">
@@ -107,8 +107,8 @@ export default function Sidebar() {
                             key={href}
                             href={href}
                             className={`relative flex flex-1 flex-col items-center justify-center gap-0.5 transition-colors ${isActive(href)
-                                    ? 'text-primary'
-                                    : 'text-muted-foreground hover:text-foreground'
+                                ? 'text-primary'
+                                : 'text-muted-foreground hover:text-foreground'
                                 }`}
                         >
                             <Icon className={`h-5 w-5 shrink-0 ${isActive(href) ? 'scale-110' : ''} transition-transform`} />

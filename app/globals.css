@@ -161,4 +161,29 @@
     size: A4;
     margin: 12mm 14mm;
   }
+
+  /*
+   * iOS Safari / iPadOS print fix:
+   * Safari only prints what's visible in the viewport when containers have
+   * h-screen / overflow-y-auto / position:fixed. Resetting all of these to
+   * auto-height + visible overflow lets the full document render before capture.
+   */
+  html,
+  body,
+  #__next,
+  main,
+  .sidebar-desktop {
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    position: static !important;
+    display: block !important;
+  }
+
+  /* Hide the sticky sidebar and mobile nav entirely when printing */
+  .sidebar-desktop,
+  .sidebar-mobile {
+    display: none !important;
+  }
 }
