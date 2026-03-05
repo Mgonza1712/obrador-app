@@ -8,9 +8,9 @@ import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 
 const navItems = [
-    { label: 'Inicio', href: '/', icon: Home },
-    { label: 'Recetario', href: '/recetario', icon: BookOpen },
-    { label: 'Fichas de Servicio', href: '/fichas', icon: ConciergeBell },
+    { label: 'Inicio', mobileLabel: 'Inicio', href: '/', icon: Home },
+    { label: 'Recetario', mobileLabel: 'Recetario', href: '/recetario', icon: BookOpen },
+    { label: 'Fichas de Servicio', mobileLabel: 'Fichas', href: '/fichas', icon: ConciergeBell },
 ]
 
 export default function Sidebar() {
@@ -102,17 +102,19 @@ export default function Sidebar() {
                 style={{ display: undefined }} /* let CSS handle it via md:hidden */
             >
                 <div className="flex h-full w-full items-stretch">
-                    {navItems.map(({ label, href, icon: Icon }) => (
+                    {navItems.map(({ label, mobileLabel, href, icon: Icon }) => (
                         <Link
                             key={href}
                             href={href}
-                            className={`relative flex flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium transition-colors ${isActive(href)
-                                ? 'text-primary'
-                                : 'text-muted-foreground hover:text-foreground'
+                            className={`relative flex flex-1 flex-col items-center justify-center gap-0.5 transition-colors ${isActive(href)
+                                    ? 'text-primary'
+                                    : 'text-muted-foreground hover:text-foreground'
                                 }`}
                         >
-                            <Icon className={`h-5 w-5 ${isActive(href) ? 'scale-110' : ''} transition-transform`} />
-                            <span>{label}</span>
+                            <Icon className={`h-5 w-5 shrink-0 ${isActive(href) ? 'scale-110' : ''} transition-transform`} />
+                            <span className="w-full text-center text-[10px] font-medium whitespace-nowrap overflow-hidden text-ellipsis px-0.5">
+                                {mobileLabel}
+                            </span>
                             {isActive(href) && (
                                 <span className="absolute bottom-0 left-1/2 h-0.5 w-8 -translate-x-1/2 rounded-full bg-primary" />
                             )}
@@ -122,18 +124,18 @@ export default function Sidebar() {
                     {user ? (
                         <button
                             onClick={handleSignOut}
-                            className="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                            className="flex flex-1 flex-col items-center justify-center gap-0.5 text-muted-foreground transition-colors hover:text-foreground"
                         >
-                            <LogOut className="h-5 w-5" />
-                            <span>Salir</span>
+                            <LogOut className="h-5 w-5 shrink-0" />
+                            <span className="text-[10px] font-medium whitespace-nowrap">Salir</span>
                         </button>
                     ) : (
                         <Link
                             href="/login"
-                            className="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                            className="flex flex-1 flex-col items-center justify-center gap-0.5 text-muted-foreground transition-colors hover:text-foreground"
                         >
-                            <LogIn className="h-5 w-5" />
-                            <span>Entrar</span>
+                            <LogIn className="h-5 w-5 shrink-0" />
+                            <span className="text-[10px] font-medium whitespace-nowrap">Entrar</span>
                         </Link>
                     )}
                 </div>
