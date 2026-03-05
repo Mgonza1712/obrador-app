@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import {
     ArrowLeft, Clock, Utensils, Scale,
-    Minus, Plus, PlusCircle, Trash2, Pencil, Settings, Save, X,
+    Minus, Plus, PlusCircle, Trash2, Pencil, Settings, Save, X, Loader2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { addIngredient, removeIngredient, deleteRecipe, updateRecipeIngredientsBulk } from '@/app/actions/recipe'
@@ -65,12 +65,28 @@ export default function CalculadoraView({
     const [inputVal, setInputVal] = useState(String(receta.base_yield))
     const porciones = Math.max(1, parseInt(inputVal) || 0)
     const unitRef = useRef<HTMLInputElement>(null)
+    const formRef = useRef<HTMLFormElement>(null)
 
     // ── Modo edición (Draft State) ──
     const [isEditing, setIsEditing] = useState(false)
     const [draft, setDraft] = useState<Ingrediente[]>([])
     const [deletedIds, setDeletedIds] = useState<string[]>([])
     const [isPending, startTransition] = useTransition()
+
+    // ── Estado de guardado del formulario de ingrediente ──
+    const [isSaving, setIsSaving] = useState(false)
+
+    const handleAddIngredient = async (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault()
+        setIsSaving(true)
+        try {
+            const formData = new FormData(e.currentTarget)
+            await addIngredient(formData)
+            formRef.current?.reset()
+        } finally {
+            setIsSaving(false)
+        }
+    }
 
     const startEditing = () => {
         setDraft([...ingredientes])   // copia actual como borrador
@@ -348,8 +364,10 @@ export default function CalculadoraView({
                                         <AlertDialog>
                                             <AlertDialogTrigger asChild>
                                                 <Button className="ml-auto gap-2" disabled={isPending}>
-                                                    <Save className="h-4 w-4" />
-                                                    {isPending ? 'Guardando…' : 'Guardar Cambios'}
+                                                    {isPending
+                                                        ? <><Loader2 className="h-4 w-4 animate-spin" /> Guardando...</>
+                                                        : <><Save className="h-4 w-4" /> Guardar Cambios</>
+                                                    }
                                                 </Button>
                                             </AlertDialogTrigger>
                                             <AlertDialogContent>
@@ -384,7 +402,7 @@ export default function CalculadoraView({
                                         {catalogo.map(item => <option key={item.name} value={item.name} />)}
                                     </datalist>
 
-                                    <form action={addIngredient} className="mt-5 flex flex-col gap-3 rounded-lg border border-dashed border-border bg-muted/30 p-4">
+                                    <form ref={formRef} onSubmit={handleAddIngredient} className="mt-5 flex flex-col gap-3 rounded-lg border border-dashed border-border bg-muted/30 p-4">
                                         <input type="hidden" name="recipe_id" value={receta.id} />
                                         <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                             <PlusCircle className="h-3.5 w-3.5" />
@@ -406,9 +424,11 @@ export default function CalculadoraView({
                                                 className="rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
                                             />
                                         </div>
-                                        <Button type="submit" variant="outline" size="sm" className="w-full gap-2">
-                                            <PlusCircle className="h-4 w-4" />
-                                            Guardar ingrediente
+                                        <Button type="submit" variant="outline" size="sm" className="w-full gap-2" disabled={isSaving}>
+                                            {isSaving
+                                                ? <><Loader2 className="h-4 w-4 animate-spin" /> Guardando...</>
+                                                : <><PlusCircle className="h-4 w-4" /> Guardar ingrediente</>
+                                            }
                                         </Button>
                                         <p className="text-center text-xs leading-relaxed text-muted-foreground/70">
                                             💡 Recomendación: Utiliza unidades mínimas{' '}

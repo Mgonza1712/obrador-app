@@ -3,13 +3,14 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { BookOpen, Home, LogIn, LogOut } from 'lucide-react'
+import { BookOpen, ConciergeBell, Home, LogIn, LogOut } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 
 const navItems = [
     { label: 'Inicio', href: '/', icon: Home },
     { label: 'Recetario', href: '/recetario', icon: BookOpen },
+    { label: 'Fichas de Servicio', href: '/fichas', icon: ConciergeBell },
 ]
 
 export default function Sidebar() {

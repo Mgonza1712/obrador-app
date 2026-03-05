@@ -120,6 +120,7 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
   }
@@ -132,6 +133,7 @@
   .sidebar-desktop {
     display: none !important;
   }
+
   .sidebar-mobile {
     display: flex !important;
   }
@@ -142,7 +144,21 @@
   .sidebar-desktop {
     display: flex !important;
   }
+
   .sidebar-mobile {
     display: none !important;
+  }
+}
+
+/* ── Impresión: forzar colores de fondo y ajustar página A4 ── */
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  @page {
+    size: A4;
+    margin: 12mm 14mm;
   }
 }
