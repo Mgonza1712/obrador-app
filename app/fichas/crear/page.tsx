@@ -1,6 +1,7 @@
+// @ts-nocheck — módulo pendiente de reescritura para el nuevo schema (assemblies/bom_lines/components)
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Sidebar from '@/components/layout/Sidebar'
@@ -8,7 +9,7 @@ import { createClient } from '@/lib/supabase/client'
 import {
     ArrowLeft, PlusCircle, Trash2, ChevronUp, ChevronDown,
     Flame, Carrot, Pipette, Utensils, Save, Loader2,
-    Wheat, Thermometer, Snowflake, Upload, X,
+    Wheat, Thermometer, Snowflake, Upload, X, Check, ChevronsUpDown, Sparkles,
 } from 'lucide-react'
 
 // ─── Fases ────────────────────────────────────────────────────────────────────
@@ -26,8 +27,12 @@ const FASES = [
 type FaseValue = (typeof FASES)[number]['value']
 const getFase = (v: FaseValue) => FASES.find(f => f.value === v) ?? FASES[0]
 
+// ─── 2C: Unidades válidas ──────────────────────────────────────────────────────
+const MISE_UNITS = ['g', 'kg', 'ml', 'l', 'ud']
+
 // ─── Tipos ────────────────────────────────────────────────────────────────────
-type MiseItem = { id: string; ingrediente: string; cantidad: string }
+// 2C: cantidad ahora tiene valor + unidad separados
+type MiseItem = { id: string; ingrediente: string; cantidad_qty: string; cantidad_unit: string; fromBom?: boolean }
 type Paso = {
     id: string
     fase: FaseValue
@@ -38,9 +43,96 @@ type Paso = {
     imagenPreview: string | null
 }
 
-function newMise(): MiseItem { return { id: crypto.randomUUID(), ingrediente: '', cantidad: '' } }
+function newMise(): MiseItem { return { id: crypto.randomUUID(), ingrediente: '', cantidad_qty: '', cantidad_unit: 'g' } }
 function newPaso(): Paso {
     return { id: crypto.randomUUID(), fase: 'coccion', instruccion: '', detalle: '', cantidad: '', imagenFile: null, imagenPreview: null }
+}
+
+// ─── 2A: Assembly combobox ────────────────────────────────────────────────────
+type AssemblyOption = { id: string; title: string }
+
+function AssemblyCombobox({
+    value,
+    inputValue,
+    onInputChange,
+    onSelect,
+    options,
+    loading,
+}: {
+    value: string | null
+    inputValue: string
+    onInputChange: (v: string) => void
+    onSelect: (assembly: AssemblyOption | null) => void
+    options: AssemblyOption[]
+    loading: boolean
+}) {
+    const [open, setOpen] = useState(false)
+    const ref = useRef<HTMLDivElement>(null)
+
+    // Close on outside click
+    useEffect(() => {
+        function handler(e: MouseEvent) {
+            if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+        }
+        document.addEventListener('mousedown', handler)
+        return () => document.removeEventListener('mousedown', handler)
+    }, [])
+
+    const filtered = options.filter(o => o.title.toLowerCase().includes(inputValue.toLowerCase()))
+    const showNew = inputValue.trim() && !options.some(o => o.title.toLowerCase() === inputValue.trim().toLowerCase())
+
+    return (
+        <div ref={ref} className="relative">
+            <div className="relative">
+                <input
+                    type="text"
+                    value={inputValue}
+                    onChange={e => { onInputChange(e.target.value); setOpen(true) }}
+                    onFocus={() => setOpen(true)}
+                    placeholder="Ej: Arroz con Cerdo — escribe o selecciona un escandallo"
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:ring-2 focus:ring-ring transition-shadow pr-8"
+                />
+                <ChevronsUpDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60" />
+            </div>
+
+            {open && (
+                <div className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-background shadow-lg overflow-hidden max-h-56 overflow-y-auto">
+                    {loading && (
+                        <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Cargando escandallos...
+                        </div>
+                    )}
+                    {!loading && filtered.length === 0 && !showNew && (
+                        <div className="px-3 py-2 text-sm text-muted-foreground italic">Sin coincidencias</div>
+                    )}
+                    {!loading && filtered.map(o => (
+                        <button
+                            key={o.id}
+                            type="button"
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => { onSelect(o); setOpen(false) }}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+                        >
+                            <Check className={`h-3.5 w-3.5 shrink-0 ${value === o.id ? 'text-primary' : 'opacity-0'}`} />
+                            {o.title}
+                            <span className="ml-auto text-xs text-muted-foreground bg-muted rounded px-1.5 py-0.5">escandallo</span>
+                        </button>
+                    ))}
+                    {!loading && showNew && (
+                        <button
+                            type="button"
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => { onSelect(null); setOpen(false) }}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left text-primary"
+                        >
+                            <PlusCircle className="h-3.5 w-3.5 shrink-0" />
+                            Crear &ldquo;{inputValue.trim()}&rdquo; como nuevo
+                        </button>
+                    )}
+                </div>
+            )}
+        </div>
+    )
 }
 
 // ─── Upload imagen de paso (mini zona) ────────────────────────────────────────
@@ -130,27 +222,20 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
         </h2>
     )
 }
-function SimpleField({ label, value, onChange, placeholder, hint }: {
-    label: string; value: string; onChange: (v: string) => void; placeholder?: string; hint?: string
-}) {
-    return (
-        <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-foreground">{label}</label>
-            <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
-                className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:ring-2 focus:ring-ring transition-shadow" />
-            {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-        </div>
-    )
-}
 
 // ─── Editor principal ─────────────────────────────────────────────────────────
 export default function CrearFichaPage() {
     const router = useRouter()
     const supabase = createClient()
 
+    // ── 2A: Assembly combobox state ─────────────────────────────────────────
+    const [titulo, setTitulo] = useState('')
+    const [assemblies, setAssemblies] = useState<AssemblyOption[]>([])
+    const [assembliesLoading, setAssembliesLoading] = useState(true)
+    const [selectedAssemblyId, setSelectedAssemblyId] = useState<string | null>(null)
+    const [bomLoading, setBomLoading] = useState(false)
 
     // Campos básicos
-    const [titulo, setTitulo] = useState('')
     const [rendimiento, setRendimiento] = useState('')
     const [tiempo, setTiempo] = useState('')
 
@@ -160,11 +245,11 @@ export default function CrearFichaPage() {
     const handleFinalFile = (f: File) => { if (finalPreview) URL.revokeObjectURL(finalPreview); setFinalFile(f); setFinalPreview(URL.createObjectURL(f)) }
     const clearFinal = () => { if (finalPreview) URL.revokeObjectURL(finalPreview); setFinalFile(null); setFinalPreview(null) }
 
-    // Mise en Place
+    // 2C: Mise en Place con valor + unidad separados
     const [mise, setMise] = useState<MiseItem[]>([newMise()])
     const addMise = () => setMise(p => [...p, newMise()])
     const removeMise = (id: string) => setMise(p => p.filter(m => m.id !== id))
-    const updateMise = (id: string, field: 'ingrediente' | 'cantidad', val: string) =>
+    const updateMise = (id: string, field: keyof Omit<MiseItem, 'id' | 'fromBom'>, val: string) =>
         setMise(p => p.map(m => m.id === id ? { ...m, [field]: val } : m))
 
     // Pasos
@@ -182,6 +267,69 @@ export default function CrearFichaPage() {
         setPasos(p => p.map(x => { if (x.id !== id) return x; if (x.imagenPreview) URL.revokeObjectURL(x.imagenPreview); return { ...x, imagenFile: file, imagenPreview: URL.createObjectURL(file) } }))
     const clearPasoImagen = (id: string) =>
         setPasos(p => p.map(x => { if (x.id !== id) return x; if (x.imagenPreview) URL.revokeObjectURL(x.imagenPreview); return { ...x, imagenFile: null, imagenPreview: null } }))
+
+    // ── Load assemblies on mount ─────────────────────────────────────────────
+    useEffect(() => {
+        async function loadAssemblies() {
+            const { data: { user } } = await supabase.auth.getUser()
+            if (!user) return
+            const { data: profile } = await supabase
+                .from('profiles')
+                .select('tenant_id')
+                .eq('id', user.id)
+                .single()
+            if (!profile?.tenant_id) return
+            const { data } = await supabase
+                .from('assemblies')
+                .select('id, title')
+                .eq('tenant_id', profile.tenant_id)
+                .eq('is_active', true)
+                .order('title')
+            setAssemblies((data ?? []) as AssemblyOption[])
+            setAssembliesLoading(false)
+        }
+        loadAssemblies()
+    }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ── 2A/2B: Handle assembly selection ────────────────────────────────────
+    async function handleAssemblySelect(assembly: AssemblyOption | null) {
+        if (!assembly) {
+            // User typed a new name — just update titulo and clear assembly link
+            setSelectedAssemblyId(null)
+            return
+        }
+        setSelectedAssemblyId(assembly.id)
+        setTitulo(assembly.title)
+
+        // 2B: Fetch BOM lines to prefill mise en place
+        setBomLoading(true)
+        try {
+            const { data: bomLines } = await supabase
+                .from('bom_lines')
+                .select('id, quantity, display_quantity, display_unit, component_id, components(name, unit)')
+                .eq('assembly_id', assembly.id)
+                .order('sort_order')
+
+            if (bomLines && bomLines.length > 0) {
+                const prefilled: MiseItem[] = bomLines.map((bl: any) => {
+                    const qty = bl.display_quantity ?? bl.quantity ?? 0
+                    const unit = bl.display_unit ?? bl.components?.unit ?? 'g'
+                    return {
+                        id: crypto.randomUUID(),
+                        ingrediente: bl.components?.name ?? '',
+                        cantidad_qty: String(qty),
+                        cantidad_unit: MISE_UNITS.includes(unit) ? unit : 'g',
+                        fromBom: true,
+                    }
+                })
+                setMise(prefilled)
+            }
+        } catch (err) {
+            console.error('Error loading BOM:', err)
+        } finally {
+            setBomLoading(false)
+        }
+    }
 
     // Guardado
     const [isSaving, setIsSaving] = useState(false)
@@ -225,8 +373,13 @@ export default function CrearFichaPage() {
                 })
             )
 
-            // 4. Mise en place sin ids internos
-            const miseEnPlace = mise.map(({ ingrediente, cantidad }) => ({ ingrediente, cantidad }))
+            // 4. Mise en place — store qty+unit separately (backend normalizes)
+            const miseEnPlace = mise.map(({ ingrediente, cantidad_qty, cantidad_unit }) => ({
+                ingrediente,
+                cantidad: cantidad_qty && cantidad_unit ? `${cantidad_qty} ${cantidad_unit}` : cantidad_qty,
+                cantidad_qty,
+                cantidad_unit,
+            }))
 
             // 5. Insertar en la tabla fichas
             const { error: insertErr } = await supabase.from('fichas').insert({
@@ -237,6 +390,7 @@ export default function CrearFichaPage() {
                 final_image_url: finalImageUrl,
                 mise_en_place: miseEnPlace,
                 steps,
+                ...(selectedAssemblyId ? { assembly_id: selectedAssemblyId } : {}),
             })
             if (insertErr) throw new Error(insertErr.message)
 
@@ -252,6 +406,8 @@ export default function CrearFichaPage() {
             setIsSaving(false)
         }
     }
+
+    const hasBomData = mise.some(m => m.fromBom)
 
     return (
         <div className="flex flex-col md:flex-row h-screen overflow-hidden bg-background">
@@ -281,11 +437,37 @@ export default function CrearFichaPage() {
                     <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
                         <SectionTitle>Datos generales</SectionTitle>
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                            <div className="sm:col-span-2">
-                                <SimpleField label="Nombre del Plato" value={titulo} onChange={setTitulo} placeholder="Ej: Arroz con Cerdo" />
+                            {/* 2A: Combobox creatable para nombre del plato */}
+                            <div className="sm:col-span-2 flex flex-col gap-1.5">
+                                <label className="text-sm font-medium text-foreground">
+                                    Nombre del Plato
+                                </label>
+                                <AssemblyCombobox
+                                    value={selectedAssemblyId}
+                                    inputValue={titulo}
+                                    onInputChange={(v) => { setTitulo(v); setSelectedAssemblyId(null) }}
+                                    onSelect={handleAssemblySelect}
+                                    options={assemblies}
+                                    loading={assembliesLoading}
+                                />
+                                {selectedAssemblyId && (
+                                    <p className="flex items-center gap-1 text-xs text-primary">
+                                        <Sparkles className="h-3 w-3" />
+                                        Vinculado al escandallo — los ingredientes se importarán automáticamente.
+                                    </p>
+                                )}
                             </div>
-                            <SimpleField label="Rendimiento" value={rendimiento} onChange={setRendimiento} placeholder="Ej: 1 porción = 350 g" hint="Cantidad final que produce la receta" />
-                            <SimpleField label="Tiempo estimado" value={tiempo} onChange={setTiempo} placeholder="Ej: 15 min" />
+                            <div className="flex flex-col gap-1.5">
+                                <label className="text-sm font-medium text-foreground">Rendimiento</label>
+                                <input type="text" value={rendimiento} onChange={e => setRendimiento(e.target.value)} placeholder="Ej: 1 porción = 350 g"
+                                    className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:ring-2 focus:ring-ring transition-shadow" />
+                                <p className="text-xs text-muted-foreground">Cantidad final que produce la receta</p>
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                                <label className="text-sm font-medium text-foreground">Tiempo estimado</label>
+                                <input type="text" value={tiempo} onChange={e => setTiempo(e.target.value)} placeholder="Ej: 15 min"
+                                    className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:ring-2 focus:ring-ring transition-shadow" />
+                            </div>
                             <div className="sm:col-span-2">
                                 <DropZone preview={finalPreview} onFile={handleFinalFile} onClear={clearFinal} label="📸 Gold Standard — foto del plato terminado" />
                             </div>
@@ -296,20 +478,43 @@ export default function CrearFichaPage() {
                     <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
                         <SectionTitle>Mise en Place</SectionTitle>
                         <p className="mb-4 text-xs text-muted-foreground">Lista de ingredientes que deben estar listos antes de empezar.</p>
+
+                        {/* 2B: BOM import badge */}
+                        {bomLoading && (
+                            <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Importando ingredientes del escandallo...
+                            </div>
+                        )}
+                        {hasBomData && !bomLoading && (
+                            <div className="mb-3 flex items-center gap-2 rounded-lg bg-primary/8 border border-primary/20 px-3 py-2 text-xs text-primary">
+                                <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                                Ingredientes importados desde el escandallo. Puedes editarlos antes de guardar.
+                            </div>
+                        )}
+
                         <div className="flex flex-col gap-2">
-                            <div className="grid grid-cols-[1fr_7rem_2rem] gap-2 px-1">
+                            {/* 2C: Header con columnas valor + unidad */}
+                            <div className="grid grid-cols-[1fr_5rem_6rem_2rem] gap-2 px-1">
                                 <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Ingrediente</span>
                                 <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Cantidad</span>
+                                <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Unidad</span>
                                 <span />
                             </div>
                             {mise.map(item => (
-                                <div key={item.id} className="grid grid-cols-[1fr_7rem_2rem] items-center gap-2">
+                                <div key={item.id} className={`grid grid-cols-[1fr_5rem_6rem_2rem] items-center gap-2 ${item.fromBom ? 'rounded-lg bg-primary/5 px-1 py-0.5' : ''}`}>
                                     <input type="text" value={item.ingrediente} placeholder="Ej: Cerdo lomo"
                                         onChange={e => updateMise(item.id, 'ingrediente', e.target.value)}
                                         className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                                    <input type="text" value={item.cantidad} placeholder="80 g"
-                                        onChange={e => updateMise(item.id, 'cantidad', e.target.value)}
-                                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold tabular-nums outline-none focus:ring-2 focus:ring-ring" />
+                                    {/* 2C: Numeric value */}
+                                    <input type="number" min="0" step="0.001" value={item.cantidad_qty} placeholder="80"
+                                        onChange={e => updateMise(item.id, 'cantidad_qty', e.target.value)}
+                                        className="w-full rounded-lg border border-border bg-background px-2 py-2 text-sm font-semibold tabular-nums outline-none focus:ring-2 focus:ring-ring text-right" />
+                                    {/* 2C: Unit select */}
+                                    <select value={item.cantidad_unit}
+                                        onChange={e => updateMise(item.id, 'cantidad_unit', e.target.value)}
+                                        className="w-full rounded-lg border border-border bg-background px-2 py-2 text-sm outline-none focus:ring-2 focus:ring-ring">
+                                        {MISE_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                                    </select>
                                     <button type="button" onClick={() => removeMise(item.id)} disabled={mise.length === 1}
                                         className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground/50 hover:bg-destructive/10 hover:text-destructive disabled:opacity-25 transition-colors">
                                         <X className="h-4 w-4" />

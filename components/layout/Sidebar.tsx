@@ -1,16 +1,22 @@
 'use client'
 
 import Link from 'next/link'
+import Image from 'next/image'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { BookOpen, ConciergeBell, Home, LogIn, LogOut } from 'lucide-react'
+import { Calculator, ChefHat, ClipboardCheck, ConciergeBell, Home, LogIn, LogOut, Receipt, ShoppingBasket, Truck } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 
 const navItems = [
     { label: 'Inicio', mobileLabel: 'Inicio', href: '/', icon: Home },
-    { label: 'Recetario', mobileLabel: 'Recetario', href: '/recetario', icon: BookOpen },
+    { label: 'Obrador', mobileLabel: 'Obrador', href: '/recetario', icon: ChefHat },
     { label: 'Fichas de Servicio', mobileLabel: 'Fichas', href: '/fichas', icon: ConciergeBell },
+    { label: 'Revisión Docs', mobileLabel: 'Revisión', href: '/admin/revision', icon: ClipboardCheck },
+    { label: 'Proveedores', mobileLabel: 'Proveed.', href: '/proveedores', icon: Truck },
+    { label: 'Catálogo', mobileLabel: 'Catálogo', href: '/catalogo', icon: ShoppingBasket },
+    { label: 'Documentos', mobileLabel: 'Docs', href: '/documentos', icon: Receipt },
+    { label: 'Escandallos', mobileLabel: 'Escand.', href: '/escandallos', icon: Calculator },
 ]
 
 export default function Sidebar() {
@@ -40,20 +46,17 @@ export default function Sidebar() {
         <>
             {/* ── Desktop Sidebar — oculto en móvil con max-md:hidden ── */}
             <aside
-                className="sidebar-desktop max-md:hidden sticky top-0 flex h-screen w-56 shrink-0 flex-col justify-between overflow-hidden border-r border-border bg-background px-3 py-6"
+                className="sidebar-desktop max-md:hidden flex h-full w-56 shrink-0 flex-col overflow-hidden border-r border-border bg-background px-3 py-6"
             >
                 {/* Logo */}
                 <div className="mb-8 px-3">
-                    <Link
-                        href="/"
-                        className="text-lg font-semibold tracking-tight text-foreground hover:opacity-80 transition-opacity"
-                    >
-                        Obrador
+                    <Link href="/" className="hover:opacity-80 transition-opacity block">
+                        <Image src="/logo-pizca.png" alt="Pizca" width={120} height={40} priority />
                     </Link>
                 </div>
 
-                {/* Nav */}
-                <nav className="flex flex-1 flex-col gap-1">
+                {/* Nav — scrollable if many items, but never pushes session section out */}
+                <nav className="flex flex-1 flex-col gap-1 min-h-0">
                     {navItems.map(({ label, href, icon: Icon }) => (
                         <Link
                             key={href}
@@ -69,8 +72,8 @@ export default function Sidebar() {
                     ))}
                 </nav>
 
-                {/* Session */}
-                <div className="border-t border-border pt-4">
+                {/* Session — always visible, never clipped */}
+                <div className="flex-shrink-0 border-t border-border pt-4">
                     {user ? (
                         <div className="flex flex-col gap-2">
                             <p className="truncate px-3 text-xs text-muted-foreground" title={user.email}>
@@ -99,10 +102,9 @@ export default function Sidebar() {
             {/* ── Mobile Bottom-Nav — solo visible en móvil con md:hidden ── */}
             <nav
                 className="sidebar-mobile md:hidden fixed bottom-0 left-0 right-0 z-50 h-16 border-t border-border bg-background"
-                style={{ display: undefined }} /* let CSS handle it via md:hidden */
             >
                 <div className="flex h-full w-full items-stretch">
-                    {navItems.map(({ label, mobileLabel, href, icon: Icon }) => (
+                    {navItems.map(({ mobileLabel, href, icon: Icon }) => (
                         <Link
                             key={href}
                             href={href}

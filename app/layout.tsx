@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Toaster } from "sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import NextTopLoader from "nextjs-toploader";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Obrador App",
+  title: "Pizca — ERP Gastronómico",
   description: "SaaS Gastronómico para gestión de recetas y producción",
 };
 
@@ -27,7 +30,16 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <NextTopLoader
+          color="#16a34a"
+          height={3}
+          showSpinner={false}
+          shadow="0 0 10px #16a34a,0 0 5px #16a34a"
+        />
+        <TooltipProvider>
+          {children}
+          <Toaster position="bottom-right" richColors />
+        </TooltipProvider>
       </body>
     </html>
   );
