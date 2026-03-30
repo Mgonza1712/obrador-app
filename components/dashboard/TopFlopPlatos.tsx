@@ -1,66 +1,73 @@
 import { createClient } from '@/lib/supabase/server'
-
-const eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' })
+import { FileText, Package } from 'lucide-react'
+import Link from 'next/link'
 
 export async function TopFlopPlatos() {
   try {
     const supabase = await createClient()
 
-    const [{ data: topData }, { data: flopData }] = await Promise.all([
-      supabase
-        .from('vw_dashboard_top_platos')
-        .select('*')
-        .order('rentabilidad_absoluta_30d', { ascending: false })
-        .limit(3),
-      supabase
-        .from('vw_dashboard_top_platos')
-        .select('*')
-        .order('rentabilidad_absoluta_30d', { ascending: true })
-        .limit(3),
+    const [
+      { count: facturasPendientes },
+      { count: albaranesHuerfanos },
+    ] = await Promise.all([
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any)
+        .from('erp_documents')
+        .select('id', { count: 'exact' })
+        .eq('doc_type', 'Factura Resumen')
+        .eq('status', 'pending'),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any)
+        .from('erp_documents')
+        .select('id', { count: 'exact' })
+        .eq('doc_type', 'Albaran')
+        .is('parent_invoice_id', null),
     ])
 
-    const top = topData ?? []
-    const flop = flopData ?? []
-    const allZero = [...top, ...flop].every((p) => (p.rentabilidad_absoluta_30d ?? 0) === 0)
-
-    const renderItem = (p: Record<string, unknown>, key: string) => (
-      <li key={key} className="flex items-center justify-between text-sm py-1">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="truncate font-medium text-foreground">{String(p.title ?? p.nombre ?? '—')}</span>
-          {!!p.categoria && (
-            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-              {String(p.categoria)}
-            </span>
-          )}
-        </div>
-        <span className="shrink-0 ml-2 font-semibold">
-          {eur.format(Number(p.rentabilidad_absoluta_30d ?? p.margin_pct ?? 0))}
-        </span>
-      </li>
-    )
+    const pendientes = facturasPendientes ?? 0
+    const huerfanos = albaranesHuerfanos ?? 0
 
     return (
-      <div className="rounded-xl border bg-card overflow-hidden">
-        <div className="bg-green-50 dark:bg-green-950/40 p-5 border-b border-border">
-          <h2 className="font-semibold text-foreground mb-2">Top 3 🏆</h2>
-          {allZero ? (
-            <p className="text-xs text-muted-foreground">Sin datos de ventas registrados aún</p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {top.map((p, i) => renderItem(p as Record<string, unknown>, `top-${i}`))}
-            </ul>
-          )}
-        </div>
-        <div className="bg-red-50 dark:bg-red-950/40 p-5">
-          <h2 className="font-semibold text-foreground mb-2">Flop 3 ⚠️</h2>
-          {allZero ? (
-            <p className="text-xs text-muted-foreground">Sin datos de ventas registrados aún</p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {flop.map((p, i) => renderItem(p as Record<string, unknown>, `flop-${i}`))}
-            </ul>
-          )}
-        </div>
+      <div className="flex flex-col gap-4">
+        {/* Widget A — Facturas Resumen pendientes */}
+        <Link
+          href="/documentos"
+          className="block rounded-xl border p-5 hover:bg-accent/30 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <FileText
+              className={`h-5 w-5 shrink-0 ${pendientes > 0 ? 'text-orange-500' : 'text-muted-foreground'}`}
+            />
+            <div>
+              <p className={`text-sm font-medium ${pendientes > 0 ? 'text-orange-700 dark:text-orange-300' : 'text-muted-foreground'}`}>
+                {pendientes > 0
+                  ? `${pendientes} factura${pendientes !== 1 ? 's' : ''} resumen pendiente${pendientes !== 1 ? 's' : ''} →`
+                  : 'Sin facturas resumen pendientes ✓'}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">Facturas Resumen por conciliar</p>
+            </div>
+          </div>
+        </Link>
+
+        {/* Widget B — Albaranes huérfanos */}
+        <Link
+          href="/documentos"
+          className="block rounded-xl border p-5 hover:bg-accent/30 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <Package
+              className={`h-5 w-5 shrink-0 ${huerfanos > 0 ? 'text-amber-500' : 'text-muted-foreground'}`}
+            />
+            <div>
+              <p className={`text-sm font-medium ${huerfanos > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}>
+                {huerfanos > 0
+                  ? `${huerfanos} albarán${huerfanos !== 1 ? 'es' : ''} sin conciliar →`
+                  : 'Todos los albaranes conciliados ✓'}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">Albaranes sin vincular a factura</p>
+            </div>
+          </div>
+        </Link>
       </div>
     )
   } catch {

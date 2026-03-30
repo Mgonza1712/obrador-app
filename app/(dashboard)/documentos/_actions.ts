@@ -101,6 +101,22 @@ export async function saveDocument(input: SaveDocumentInput): Promise<ActionResu
         }
     }
 
+    // Recalculate reconciliation_delta: invoice total - albaranes - lines
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sb = supabase as any
+    const [{ data: docRow }, { data: albaranes }, { data: savedLines }] = await Promise.all([
+        sb.from('erp_documents').select('total_amount').eq('id', documentId).single(),
+        sb.from('erp_documents').select('total_amount').eq('parent_invoice_id', documentId),
+        supabase.from('erp_purchase_lines').select('line_total_cost').eq('document_id', documentId),
+    ])
+    const delta =
+        (docRow?.total_amount ?? 0) -
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ((albaranes ?? []).reduce((s: number, a: any) => s + (a.total_amount ?? 0), 0)) -
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ((savedLines ?? []).reduce((s: number, l: any) => s + (l.line_total_cost ?? 0), 0))
+    await sb.from('erp_documents').update({ reconciliation_delta: delta }).eq('id', documentId)
+
     revalidatePath(`/documentos/${documentId}`)
     revalidatePath('/documentos')
     return { success: true }

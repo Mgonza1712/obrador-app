@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import AssemblyForm from "@/components/escandallos/AssemblyForm";
 
 export default function NewEscandalloPage() {
@@ -21,7 +22,19 @@ export default function NewEscandalloPage() {
         </p>
       </div>
 
-      <AssemblyForm />
+      {/* Sección 1: Datos del escandallo */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Datos del Escandallo</CardTitle>
+          <CardDescription>
+            Precio de venta, margen objetivo, alérgenos y configuración de costes.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AssemblyForm />
+        </CardContent>
+      </Card>
+
     </div>
   );
 }

@@ -16,9 +16,10 @@ async function recalcAndSaveDelta(invoiceId: string): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sb = await createClient() as any
 
-    const [{ data: invoice }, { data: albaranes }] = await Promise.all([
+    const [{ data: invoice }, { data: albaranes }, { data: lines }] = await Promise.all([
         sb.from('erp_documents').select('total_amount').eq('id', invoiceId).single(),
         sb.from('erp_documents').select('total_amount').eq('parent_invoice_id', invoiceId),
+        sb.from('erp_purchase_lines').select('line_total_cost').eq('document_id', invoiceId),
     ])
 
     const invoiceTotal = invoice?.total_amount ?? 0
@@ -27,7 +28,9 @@ async function recalcAndSaveDelta(invoiceId: string): Promise<void> {
         (sum: number, a: any) => sum + (a.total_amount ?? 0),
         0,
     )
-    const delta = invoiceTotal - albaranTotal
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const linesTotal = (lines ?? []).reduce((sum: number, l: any) => sum + (l.line_total_cost ?? 0), 0)
+    const delta = invoiceTotal - albaranTotal - linesTotal
     const newStatus = Math.abs(delta) <= TOLERANCE ? 'matched' : 'mismatch'
 
     await sb

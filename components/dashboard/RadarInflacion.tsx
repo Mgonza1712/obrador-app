@@ -1,54 +1,57 @@
 import { createClient } from '@/lib/supabase/server'
-import { Flame, ShieldCheck } from 'lucide-react'
-
-const eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' })
+import { Bell, Settings, ShieldCheck } from 'lucide-react'
+import Link from 'next/link'
 
 export async function RadarInflacion() {
   try {
     const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return null
 
-    const { data } = await supabase
-      .from('vw_dashboard_inflacion')
-      .select('*')
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('tenant_id')
+      .eq('id', user.id)
+      .single()
+
+    const tenantId = profile?.tenant_id
+    if (!tenantId) return null
+
+    const { count: alertasNoLeidas } = await supabase
+      .from('cost_alerts')
+      .select('id', { count: 'exact' })
+      .eq('tenant_id', tenantId)
       .eq('is_read', false)
-      .order('pct_change', { ascending: false })
-      .limit(3)
 
-    const alertas = data ?? []
-
-    if (alertas.length === 0) {
+    if (!alertasNoLeidas || alertasNoLeidas === 0) {
       return (
-        <div className="rounded-xl border border-border bg-card p-5 flex items-center gap-3">
-          <ShieldCheck className="h-5 w-5 text-muted-foreground shrink-0" />
-          <p className="text-sm text-muted-foreground">Sin subidas de precio recientes.</p>
-        </div>
+        <Link
+          href="/alertas-rentabilidad"
+          className="block rounded-xl border border-border bg-card p-5 hover:opacity-80 transition-opacity"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <ShieldCheck className="h-5 w-5 text-muted-foreground shrink-0" />
+              <p className="text-sm text-muted-foreground">Sin alertas pendientes ✓</p>
+            </div>
+            <Settings className="h-4 w-4 text-muted-foreground/60 shrink-0" />
+          </div>
+        </Link>
       )
     }
 
     return (
-      <div className="rounded-xl border bg-card p-5 space-y-3">
-        <div className="flex items-center gap-2">
-          <Flame className="h-5 w-5 text-orange-500 shrink-0" />
-          <h2 className="font-semibold text-foreground">Radar de inflación</h2>
+      <Link
+        href="/alertas-rentabilidad"
+        className="block rounded-xl border border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-950/40 p-5 hover:opacity-90 transition-opacity"
+      >
+        <div className="flex items-center gap-3">
+          <Bell className="h-5 w-5 text-orange-600 dark:text-orange-400 shrink-0" />
+          <p className="text-sm font-medium text-orange-700 dark:text-orange-300">
+            {alertasNoLeidas} alerta{alertasNoLeidas !== 1 ? 's' : ''} pendiente{alertasNoLeidas !== 1 ? 's' : ''} →
+          </p>
         </div>
-        <ul className="space-y-2">
-          {alertas.map((a, i) => (
-            <li key={i} className="flex items-center justify-between text-sm">
-              <span className="font-medium text-foreground truncate max-w-[50%]">
-                {a.ingredient_name ?? '—'}
-              </span>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-muted-foreground">
-                  {eur.format(Number(a.old_value ?? 0))} → {eur.format(Number(a.new_value ?? 0))}
-                </span>
-                <span className="rounded-full bg-red-100 dark:bg-red-900/40 px-2 py-0.5 text-xs font-semibold text-red-600 dark:text-red-400">
-                  +{Number(a.pct_change ?? 0).toFixed(1)}%
-                </span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      </div>
+      </Link>
     )
   } catch {
     return (

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import CostAlertsFeed from "@/components/escandallos/CostAlertsFeed";
+import AlertConfigDialog from "@/components/escandallos/AlertConfigDialog";
 import type { CostAlertWithAssembly } from "@/lib/types/escandallo.types";
 
 export default async function AlertasRentabilidadPage() {
@@ -18,6 +19,17 @@ export default async function AlertasRentabilidadPage() {
     .eq("id", user.id)
     .single();
   if (!profile?.tenant_id) redirect("/login");
+
+  // Fetch tenant config for alert thresholds
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: tenantConfig } = await (supabase as any)
+    .from("erp_tenant_config")
+    .select("threshold_price_spike_pct, threshold_cogs_increase_pct")
+    .eq("tenant_id", profile.tenant_id)
+    .maybeSingle();
+
+  const spikePct: number = tenantConfig?.threshold_price_spike_pct ?? 10;
+  const cogsPct: number = tenantConfig?.threshold_cogs_increase_pct ?? 5;
 
   // Fetch last 50 alerts, unread first
   const { data: alerts } = await supabase
@@ -63,13 +75,16 @@ export default async function AlertasRentabilidadPage() {
         <span className="text-foreground">Alertas de Rentabilidad</span>
       </nav>
 
-      <div>
-        <h1 className="text-2xl font-bold">Alertas de Rentabilidad</h1>
-        <p className="text-sm text-muted-foreground">
-          {unreadCount > 0
-            ? `${unreadCount} alertas sin leer`
-            : "Todas las alertas leídas"}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Alertas de Rentabilidad</h1>
+          <p className="text-sm text-muted-foreground">
+            {unreadCount > 0
+              ? `${unreadCount} alertas sin leer`
+              : "Todas las alertas leídas"}
+          </p>
+        </div>
+        <AlertConfigDialog initialSpikePct={spikePct} initialCogsPct={cogsPct} />
       </div>
 
       <CostAlertsFeed

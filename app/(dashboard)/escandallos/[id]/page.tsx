@@ -2,17 +2,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { Separator } from "@/components/ui/separator";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import AssemblyForm from "@/components/escandallos/AssemblyForm";
-import BomLineEditor from "@/components/escandallos/BomLineEditor";
 import MarginBadge from "@/components/escandallos/MarginBadge";
+import EscandalloDetailClient from "./EscandalloDetailClient";
 import { getIngredientOptions } from "@/lib/queries/escandallo.queries";
 import type {
   AssemblyWithFinancials,
@@ -40,7 +31,7 @@ export default async function EscandalloDetailPage({ params }: Props) {
     .single();
   if (!profile?.tenant_id) redirect("/login");
 
-  const [assemblyResult, bomResult, ingredientOptions] = await Promise.all([
+  const [assemblyResult, bomResult, ingredientOptions, displayFieldsResult] = await Promise.all([
     supabase
       .from("assemblies_with_financials")
       .select("*")
@@ -53,12 +44,35 @@ export default async function EscandalloDetailPage({ params }: Props) {
       .eq("assembly_id", id)
       .order("sort_order"),
     getIngredientOptions(supabase, profile.tenant_id),
+    // bom_lines_expanded view does not expose display_quantity/display_unit yet;
+    // fetch them directly from bom_lines and merge below.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabase as any)
+      .from("bom_lines")
+      .select("id, display_quantity, display_unit")
+      .eq("assembly_id", id),
   ]);
 
   if (!assemblyResult.data) notFound();
 
   const a = assemblyResult.data as AssemblyWithFinancials;
-  const lines = (bomResult.data ?? []) as BomLineExpanded[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allergens: string[] = (assemblyResult.data as any).allergens ?? [];
+
+  // Build a lookup of display fields keyed by bom_line id
+  const displayFieldsMap: Record<string, { display_quantity: number | null; display_unit: string | null }> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const row of (displayFieldsResult.data ?? []) as any[]) {
+    displayFieldsMap[row.id] = {
+      display_quantity: row.display_quantity ?? null,
+      display_unit: row.display_unit ?? null,
+    };
+  }
+
+  const lines = (bomResult.data ?? []).map((l) => ({
+    ...l,
+    ...(displayFieldsMap[l.id ?? ""] ?? {}),
+  })) as BomLineExpanded[];
   // Exclude the assembly itself from sub-recipe options
   const options = ingredientOptions.filter(
     (o) => !(o.type === "sub_assembly" && o.id === id)
@@ -92,6 +106,18 @@ export default async function EscandalloDetailPage({ params }: Props) {
           </div>
           {a.category && (
             <p className="text-sm text-muted-foreground">{a.category}</p>
+          )}
+          {allergens.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {allergens.map((alergeno) => (
+                <span
+                  key={alergeno}
+                  className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
+                >
+                  {alergeno}
+                </span>
+              ))}
+            </div>
           )}
         </div>
         <MarginBadge
@@ -130,38 +156,12 @@ export default async function EscandalloDetailPage({ params }: Props) {
         </div>
       </div>
 
-      {/* SECCIÓN 1: Composición del plato */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Composición del Plato</CardTitle>
-          <CardDescription>
-            Ingredientes y sub-recetas que forman este escandallo. El coste
-            total se recalcula automáticamente al guardar.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <BomLineEditor
-            assemblyId={id}
-            initialLines={lines}
-            ingredientOptions={options}
-          />
-        </CardContent>
-      </Card>
-
-      <Separator />
-
-      {/* SECCIÓN 2: Datos financieros */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Datos del Escandallo</CardTitle>
-          <CardDescription>
-            Precio de venta, margen objetivo y configuración de costes.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <AssemblyForm assembly={a} />
-        </CardContent>
-      </Card>
+      <EscandalloDetailClient
+        assemblyId={id}
+        assembly={a}
+        initialLines={lines}
+        ingredientOptions={options}
+      />
     </div>
   );
 }

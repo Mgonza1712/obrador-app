@@ -110,7 +110,7 @@ export default function AssemblyList({ assemblies }: Props) {
       </div>
 
       <div className="rounded-lg border">
-        <div className="overflow-x-auto">
+        <div>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
@@ -174,13 +174,21 @@ export default function AssemblyList({ assemblies }: Props) {
                     </td>
                     <td className="px-4 py-3 text-center">
                       {(a.unread_alerts_count ?? 0) > 0 ? (
-                        <Badge
-                          variant="destructive"
-                          className="gap-1 px-1.5"
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            router.push('/alertas-rentabilidad')
+                          }}
+                          className="cursor-pointer"
                         >
-                          <Bell className="h-3 w-3" />
-                          {a.unread_alerts_count}
-                        </Badge>
+                          <Badge
+                            variant="destructive"
+                            className="gap-1 px-1.5"
+                          >
+                            <Bell className="h-3 w-3" />
+                            {a.unread_alerts_count}
+                          </Badge>
+                        </button>
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}

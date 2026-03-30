@@ -9,6 +9,7 @@ import type {
   AssemblyFormValues,
   BomLineInput,
   ReorderPayload,
+  TenantConfigFormValues,
 } from "@/lib/types/escandallo.types";
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
@@ -22,6 +23,12 @@ const AssemblySchema = z.object({
   buffer_pct: z.number().min(0).max(20).default(5),
   notes: z.string().nullable().optional(),
   is_active: z.boolean().default(true),
+  allergens: z.array(z.string()).default([]),
+});
+
+const TenantConfigSchema = z.object({
+  threshold_price_spike_pct: z.number().min(0).max(100),
+  threshold_cogs_increase_pct: z.number().min(0).max(100),
 });
 
 const BomLineSchema = z.object({
@@ -255,6 +262,41 @@ export async function markAlertAsRead(alertId: string): Promise<ActionResult> {
 
     revalidatePath("/alertas-rentabilidad");
     revalidatePath("/escandallos");
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Error desconocido" };
+  }
+}
+
+// ─── Tenant config actions ────────────────────────────────────────────────────
+export async function upsertTenantConfig(
+  formData: TenantConfigFormValues
+): Promise<ActionResult> {
+  try {
+    const parsed = TenantConfigSchema.safeParse(formData);
+    if (!parsed.success) {
+      return { success: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+    }
+
+    const tenantId = await getAuthTenantId();
+    const supabase = await createClient();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any)
+      .from("erp_tenant_config")
+      .upsert(
+        {
+          tenant_id: tenantId,
+          threshold_price_spike_pct: parsed.data.threshold_price_spike_pct,
+          threshold_cogs_increase_pct: parsed.data.threshold_cogs_increase_pct,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "tenant_id" }
+      );
+
+    if (error) return { success: false, error: error.message };
+
+    revalidatePath("/alertas-rentabilidad");
     return { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : "Error desconocido" };

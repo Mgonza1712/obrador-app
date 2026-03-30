@@ -26,6 +26,12 @@ export interface AssemblyFormValues {
   buffer_pct: number;
   notes: string | null;
   is_active: boolean;
+  allergens?: string[];
+}
+
+export interface TenantConfigFormValues {
+  threshold_price_spike_pct: number;
+  threshold_cogs_increase_pct: number;
 }
 
 export interface BomLineInput {

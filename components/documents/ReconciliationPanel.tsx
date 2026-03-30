@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition, useRef, useCallback } from 'react'
+import { useState, useTransition, useRef } from 'react'
 import {
     Clock,
     CheckCircle2,
@@ -10,7 +10,10 @@ import {
     Link2,
     Link2Off,
     Loader2,
+    ChevronsUpDown,
 } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command'
 import { linkDeliveryNote, unlinkDeliveryNote, searchOrphanAlbaranes, confirmManualReconciliation } from '@/app/(dashboard)/documentos/[id]/_actions'
 import type { LinkedAlbaran } from '@/app/(dashboard)/documentos/[id]/page'
 
@@ -33,6 +36,7 @@ interface ReconciliationPanelProps {
     referencedNotes: string[] | null
     linkedAlbaranes: LinkedAlbaran[]
     invoiceTotal: number | null
+    purchaseLinesTotal?: number
 }
 
 // ── Alert banner ──────────────────────────────────────────────────────────────
@@ -103,6 +107,121 @@ function AlertBanner({
     )
 }
 
+// ── Albaran Combobox ──────────────────────────────────────────────────────────
+
+function AlbaranCombobox({
+    providerId,
+    linked,
+    onLink,
+    disabled,
+}: {
+    providerId: string
+    linked: LinkedAlbaran[]
+    onLink: (albaran: OrphanResult) => void
+    disabled?: boolean
+}) {
+    const [open, setOpen] = useState(false)
+    const [options, setOptions] = useState<OrphanResult[]>([])
+    const [loading, setLoading] = useState(false)
+    const loadedRef = useRef(false)
+
+    async function loadOptions() {
+        if (loadedRef.current) return
+        loadedRef.current = true
+        setLoading(true)
+        try {
+            const results = await searchOrphanAlbaranes('', providerId)
+            setOptions(results)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const linkedIds = new Set(linked.map((a) => a.id))
+    const available = options.filter((o) => !linkedIds.has(o.id))
+
+    return (
+        <Popover
+            open={open}
+            onOpenChange={(o) => {
+                setOpen(o)
+                if (o) loadOptions()
+            }}
+        >
+            <PopoverTrigger asChild>
+                <button
+                    disabled={disabled}
+                    className="flex w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                    role="combobox"
+                    aria-expanded={open}
+                    aria-label="Seleccionar albarán huérfano para vincular"
+                >
+                    <span className="flex items-center gap-2 text-muted-foreground">
+                        <Search className="h-4 w-4 shrink-0" />
+                        Seleccionar albarán huérfano para vincular...
+                    </span>
+                    <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[480px] p-0" align="start">
+                <Command>
+                    <CommandInput placeholder="Buscar por número de albarán..." />
+                    {loading && (
+                        <div className="flex items-center justify-center py-6">
+                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        </div>
+                    )}
+                    {!loading && (
+                        <>
+                            <CommandEmpty>No hay albaranes huérfanos disponibles.</CommandEmpty>
+                            <CommandGroup>
+                                {available.map((r) => (
+                                    <CommandItem
+                                        key={r.id}
+                                        value={`${r.document_number ?? ''} ${r.document_date ?? ''}`}
+                                        onSelect={() => {
+                                            onLink(r)
+                                            setOpen(false)
+                                            // Reset so next open reloads a fresh list
+                                            loadedRef.current = false
+                                        }}
+                                    >
+                                        <div className="flex flex-1 items-center justify-between gap-4">
+                                            <span className="font-mono text-sm">
+                                                {r.document_number ?? '(sin número)'}
+                                            </span>
+                                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                                {r.document_date && (
+                                                    <span>
+                                                        {new Date(r.document_date).toLocaleDateString('es-ES', {
+                                                            day: '2-digit',
+                                                            month: 'short',
+                                                            year: 'numeric',
+                                                        })}
+                                                    </span>
+                                                )}
+                                                {r.total_amount != null && (
+                                                    <span className="tabular-nums font-medium text-foreground">
+                                                        {r.total_amount.toLocaleString('es-ES', {
+                                                            minimumFractionDigits: 2,
+                                                        })}{' '}
+                                                        €
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <Link2 className="ml-3 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                    </CommandItem>
+                                ))}
+                            </CommandGroup>
+                        </>
+                    )}
+                </Command>
+            </PopoverContent>
+        </Popover>
+    )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function ReconciliationPanel({
@@ -113,44 +232,18 @@ export default function ReconciliationPanel({
     referencedNotes,
     linkedAlbaranes: initialLinked,
     invoiceTotal,
+    purchaseLinesTotal = 0,
 }: ReconciliationPanelProps) {
     const [linked, setLinked] = useState<LinkedAlbaran[]>(initialLinked)
-    const [searchQuery, setSearchQuery] = useState('')
-    const [searchResults, setSearchResults] = useState<OrphanResult[]>([])
-    const [isSearching, setIsSearching] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [isPending, startTransition] = useTransition()
     const [isConfirmPending, startConfirmTransition] = useTransition()
     const [confirmError, setConfirmError] = useState<string | null>(null)
-    const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+    // Live delta: always computed from current invoiceTotal, linked albaranes, and purchase lines
     const albaraneTotal = linked.reduce((sum, a) => sum + (a.total_amount ?? 0), 0)
-    const displayDelta = reconciliationDelta ?? ((invoiceTotal ?? 0) - albaraneTotal)
+    const displayDelta = (invoiceTotal ?? 0) - albaraneTotal - purchaseLinesTotal
     const withinTolerance = Math.abs(displayDelta) <= 0.01
-
-    // Debounced orphan search
-    const handleSearch = useCallback(
-        (q: string) => {
-            setSearchQuery(q)
-            if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
-            if (!q.trim() || !providerId) {
-                setSearchResults([])
-                return
-            }
-            searchDebounceRef.current = setTimeout(async () => {
-                setIsSearching(true)
-                try {
-                    const results = await searchOrphanAlbaranes(q, providerId)
-                    // Filter out already-linked albaranes
-                    const linkedIds = new Set(linked.map((a) => a.id))
-                    setSearchResults(results.filter((r) => !linkedIds.has(r.id)))
-                } finally {
-                    setIsSearching(false)
-                }
-            }, 300)
-        },
-        [providerId, linked],
-    )
 
     function handleLink(albaran: OrphanResult) {
         setError(null)
@@ -166,7 +259,6 @@ export default function ReconciliationPanel({
                         total_amount: albaran.total_amount,
                     },
                 ])
-                setSearchResults((prev) => prev.filter((r) => r.id !== albaran.id))
             } else {
                 setError(result.error)
             }
@@ -194,6 +286,9 @@ export default function ReconciliationPanel({
             }
         })
     }
+
+    // Keep reconciliationDelta in scope to suppress the unused-var warning
+    void reconciliationDelta
 
     return (
         <section className="rounded-lg border border-border bg-card p-5 space-y-5">
@@ -279,63 +374,16 @@ export default function ReconciliationPanel({
                 )}
             </div>
 
-            {/* Orphan albaran search */}
+            {/* Orphan albaran combobox */}
             {providerId && (
                 <div>
                     <h3 className="mb-3 text-sm font-medium">Buscar albaranes huérfanos</h3>
-                    <div className="relative">
-                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                        <input
-                            type="text"
-                            value={searchQuery}
-                            onChange={(e) => handleSearch(e.target.value)}
-                            placeholder="Buscar por número de albarán..."
-                            aria-label="Buscar albaranes huérfanos"
-                            className="w-full rounded-md border border-input bg-background pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                        />
-                        {isSearching && (
-                            <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
-                        )}
-                    </div>
-
-                    {searchResults.length > 0 && (
-                        <div className="mt-2 rounded-md border border-border bg-background shadow-sm overflow-hidden">
-                            {searchResults.map((r) => (
-                                <div
-                                    key={r.id}
-                                    className="flex items-center justify-between gap-3 border-b border-border last:border-0 px-3 py-2.5 hover:bg-accent/40 transition-colors"
-                                >
-                                    <div className="text-sm">
-                                        <span className="font-mono">{r.document_number ?? '(sin número)'}</span>
-                                        {r.document_date && (
-                                            <span className="ml-2 text-xs text-muted-foreground">
-                                                {new Date(r.document_date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}
-                                            </span>
-                                        )}
-                                        {r.total_amount != null && (
-                                            <span className="ml-2 text-xs font-medium tabular-nums">
-                                                {r.total_amount.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-                                            </span>
-                                        )}
-                                    </div>
-                                    <button
-                                        onClick={() => handleLink(r)}
-                                        disabled={isPending}
-                                        className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs hover:bg-accent disabled:opacity-40 transition-colors"
-                                    >
-                                        <Link2 className="h-3.5 w-3.5" />
-                                        Vincular
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    {searchQuery && !isSearching && searchResults.length === 0 && (
-                        <p className="mt-2 text-xs text-muted-foreground">
-                            No se encontraron albaranes huérfanos para &ldquo;{searchQuery}&rdquo;.
-                        </p>
-                    )}
+                    <AlbaranCombobox
+                        providerId={providerId}
+                        linked={linked}
+                        onLink={handleLink}
+                        disabled={isPending}
+                    />
                 </div>
             )}
 

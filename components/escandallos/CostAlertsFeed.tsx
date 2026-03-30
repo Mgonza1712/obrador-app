@@ -2,6 +2,7 @@
 
 import { useState, useTransition, useEffect } from "react";
 import { toast } from "sonner";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { markAlertAsRead, markAllAlertsAsRead } from "@/lib/actions/escandallo.actions";
@@ -50,6 +51,8 @@ interface Props {
 export default function CostAlertsFeed({ initialAlerts, tenantId }: Props) {
   const [alerts, setAlerts] = useState<CostAlertWithAssembly[]>(initialAlerts);
   const [isPending, startTransition] = useTransition();
+  // showReadAlerts[type] = true means the read alerts for that group are expanded
+  const [showReadAlerts, setShowReadAlerts] = useState<Record<string, boolean>>({});
 
   // Supabase Realtime subscription
   useEffect(() => {
@@ -105,6 +108,10 @@ export default function CostAlertsFeed({ initialAlerts, tenantId }: Props) {
     });
   }
 
+  function toggleReadAlerts(type: string) {
+    setShowReadAlerts((prev) => ({ ...prev, [type]: !prev[type] }));
+  }
+
   // Group by type
   const grouped: Record<string, CostAlertWithAssembly[]> = {};
   for (const alert of alerts) {
@@ -146,22 +153,48 @@ export default function CostAlertsFeed({ initialAlerts, tenantId }: Props) {
         const group = grouped[type];
         if (!group || group.length === 0) return null;
         const config = ALERT_CONFIG[type];
+        const unread = group.filter((a) => !a.is_read);
+        const read = group.filter((a) => a.is_read);
+        const unreadInGroup = unread.length;
+        const readCount = read.length;
+        const showRead = showReadAlerts[type] ?? false;
+
+        // If the group has ONLY read alerts and is collapsed, render a compact collapsed row
+        if (unreadInGroup === 0 && !showRead) {
+          return (
+            <div key={type}>
+              <button
+                className="flex w-full items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-accent/30 transition-colors"
+                onClick={() => toggleReadAlerts(type)}
+              >
+                <ChevronRight className="h-4 w-4 shrink-0" />
+                <span>{config.emoji}</span>
+                <span className="font-medium">{config.label}</span>
+                <span className="ml-auto text-xs">
+                  {readCount} alerta{readCount !== 1 ? "s" : ""} leída{readCount !== 1 ? "s" : ""}
+                </span>
+                <span className="text-xs text-primary font-medium">Ver</span>
+              </button>
+            </div>
+          );
+        }
 
         return (
           <div key={type} className="space-y-3">
             <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
               <span>{config.emoji}</span>
               {config.label}
-              <Badge variant="secondary">{group.length}</Badge>
+              {unreadInGroup > 0 && (
+                <Badge variant="secondary">{unreadInGroup}</Badge>
+              )}
             </h2>
 
             <div className="space-y-2">
-              {group.map((alert) => (
+              {/* Unread alerts: full card */}
+              {unread.map((alert) => (
                 <div
                   key={alert.id}
-                  className={`rounded-lg border p-4 transition-opacity ${
-                    alert.is_read ? "opacity-50" : ""
-                  }`}
+                  className="rounded-lg border p-4"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1 flex-1">
@@ -203,20 +236,61 @@ export default function CostAlertsFeed({ initialAlerts, tenantId }: Props) {
                       </p>
                     </div>
 
-                    {!alert.is_read && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="shrink-0 text-xs"
-                        onClick={() => handleMarkRead(alert.id)}
-                        disabled={isPending}
-                      >
-                        Leída
-                      </Button>
-                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0 text-xs"
+                      onClick={() => handleMarkRead(alert.id)}
+                      disabled={isPending}
+                    >
+                      Leída
+                    </Button>
                   </div>
                 </div>
               ))}
+
+              {/* Read alerts: collapsed toggle row */}
+              {readCount > 0 && !showRead && (
+                <button
+                  className="flex w-full items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-accent/30 transition-colors"
+                  onClick={() => toggleReadAlerts(type)}
+                >
+                  <ChevronRight className="h-4 w-4 shrink-0" />
+                  <span>
+                    {readCount} alerta{readCount !== 1 ? "s" : ""} leída{readCount !== 1 ? "s" : ""}
+                  </span>
+                  <span className="ml-auto text-xs text-primary font-medium">Ver</span>
+                </button>
+              )}
+
+              {/* Read alerts: expanded compact list */}
+              {showRead && read.map((alert) => (
+                <div
+                  key={alert.id}
+                  className="rounded-lg border border-dashed px-3 py-2.5 opacity-60"
+                >
+                  <p className="text-sm">{alert.message}</p>
+                  {alert.assembly_title && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Plato:{" "}
+                      <span className="font-medium">{alert.assembly_title}</span>
+                      {" · "}
+                      {formatDate(alert.created_at)}
+                    </p>
+                  )}
+                </div>
+              ))}
+
+              {/* Collapse button when read alerts are expanded */}
+              {showRead && readCount > 0 && (
+                <button
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => toggleReadAlerts(type)}
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  Ocultar leídas
+                </button>
+              )}
             </div>
           </div>
         );

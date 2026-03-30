@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter, usePathname } from 'next/navigation'
-import { useRef, useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import {
     ChevronUp,
@@ -69,10 +69,10 @@ function ReconciliationBadge({ status, delta }: { status: string | null; delta: 
 // ── Filter helpers ────────────────────────────────────────────────────────────
 
 const DOC_TYPES: { label: string; value: string }[] = [
-    { label: 'Factura', value: 'factura' },
-    { label: 'Factura Resumen', value: 'factura resumen' },
-    { label: 'Albarán', value: 'albarán' },
-    { label: 'Presupuesto', value: 'presupuesto' },
+    { label: 'Factura', value: 'Factura' },
+    { label: 'Factura Resumen', value: 'Factura Resumen' },
+    { label: 'Albarán', value: 'Albaran' },
+    { label: 'Presupuesto', value: 'Presupuesto' },
 ]
 
 function buildUrl(pathname: string, current: URLSearchParams, updates: Record<string, string | null>): string {
@@ -84,7 +84,10 @@ function buildUrl(pathname: string, current: URLSearchParams, updates: Record<st
             params.set(key, value)
         }
     }
-    params.delete('page') // Reset page on filter change
+    // Reset to page 1 on filter/sort changes, but not when pagination itself sets page
+    if (!('page' in updates)) {
+        params.delete('page')
+    }
     const qs = params.toString()
     return qs ? `${pathname}?${qs}` : pathname
 }
@@ -142,14 +145,22 @@ export default function DocumentosClient({
     const [filtersOpen, setFiltersOpen] = useState(false)
     const [isExporting, setIsExporting] = useState(false)
     const [providerOpen, setProviderOpen] = useState(false)
+    const [providerSearch, setProviderSearch] = useState('')
 
     // isPending from useTransition shows a loading overlay on the
     // table while the server re-fetches, without blocking user interaction.
     const [isPending, startTransition] = useTransition()
 
-    // filterKey increments when "Limpiar filtros" is clicked,
-    // forcing uncontrolled inputs to remount with empty defaultValues.
-    const [filterKey, setFilterKey] = useState(0)
+    // Controlled state for filter inputs — allows handleClearFilters to reset them
+    // instantly without waiting for the URL navigation to complete (fixes BUG 4).
+    const [docNumberInput, setDocNumberInput] = useState('')
+    const [dateFromInput, setDateFromInput] = useState('')
+    const [dateToInput, setDateToInput] = useState('')
+    const [amountMinInput, setAmountMinInput] = useState('')
+    const [amountMaxInput, setAmountMaxInput] = useState('')
+    const [statusInput, setStatusInput] = useState('')
+    const [reconcStatusInput, setReconcStatusInput] = useState('')
+    const [selectedProviderId, setSelectedProviderId] = useState('')
 
     // Read current search params as a snapshot for rendering defaultValues.
     // navigate() always re-reads window.location.search at call time to avoid
@@ -184,8 +195,19 @@ export default function DocumentosClient({
     const currentDocTypes = (currentParams.get('doc_type') ?? '').split(',').filter(Boolean)
 
     const docNumberDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-    const amountMinDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-    const amountMaxDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+    // Sync controlled filter inputs from URL on mount (for direct URL loads / bookmarks)
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search)
+        setDocNumberInput(params.get('document_number') ?? '')
+        setDateFromInput(params.get('date_from') ?? '')
+        setDateToInput(params.get('date_to') ?? '')
+        setAmountMinInput(params.get('amount_min') ?? '')
+        setAmountMaxInput(params.get('amount_max') ?? '')
+        setStatusInput(params.get('status') ?? '')
+        setReconcStatusInput(params.get('reconciliation_status') ?? '')
+        setSelectedProviderId(params.get('provider_id') ?? '')
+    }, [])
 
     // BUG FIX (filters): Read window.location.search at call time (not from closure)
     // to prevent stale URL state when multiple filters change within the debounce window.
@@ -219,9 +241,17 @@ export default function DocumentosClient({
     }
 
     function handleClearFilters() {
-        // Remount inputs so uncontrolled DOM values visually clear
-        setFilterKey((k) => k + 1)
+        if (docNumberDebounceRef.current) clearTimeout(docNumberDebounceRef.current)
         setSelectedDocTypes([])
+        setProviderSearch('')
+        setDocNumberInput('')
+        setDateFromInput('')
+        setDateToInput('')
+        setAmountMinInput('')
+        setAmountMaxInput('')
+        setStatusInput('')
+        setReconcStatusInput('')
+        setSelectedProviderId('')
         startTransition(() => {
             router.push(pathname)
         })
@@ -305,8 +335,7 @@ export default function DocumentosClient({
                         </div>
                     </div>
 
-                    {/* Inputs — key forces remount on clear so defaultValues reset */}
-                    <div key={filterKey} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                         {/* Status */}
                         <div>
                             <label htmlFor="filter-status" className="mb-1 block text-xs font-medium text-muted-foreground">
@@ -314,8 +343,8 @@ export default function DocumentosClient({
                             </label>
                             <select
                                 id="filter-status"
-                                defaultValue={currentStatus}
-                                onChange={(e) => navigate({ status: e.target.value || null })}
+                                value={statusInput}
+                                onChange={(e) => { setStatusInput(e.target.value); navigate({ status: e.target.value || null }) }}
                                 className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                             >
                                 <option value="">Todos</option>
@@ -331,8 +360,8 @@ export default function DocumentosClient({
                             </label>
                             <select
                                 id="filter-reconc"
-                                defaultValue={currentReconcStatus}
-                                onChange={(e) => navigate({ reconciliation_status: e.target.value || null })}
+                                value={reconcStatusInput}
+                                onChange={(e) => { setReconcStatusInput(e.target.value); navigate({ reconciliation_status: e.target.value || null }) }}
                                 className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                             >
                                 <option value="">Todos</option>
@@ -349,7 +378,7 @@ export default function DocumentosClient({
                             <label className="mb-1 block text-xs font-medium text-muted-foreground">
                                 Proveedor
                             </label>
-                            <Popover open={providerOpen} onOpenChange={setProviderOpen}>
+                            <Popover open={providerOpen} onOpenChange={(o) => { setProviderOpen(o); if (!o) setProviderSearch('') }}>
                                 <PopoverTrigger asChild>
                                     <button
                                         type="button"
@@ -357,45 +386,56 @@ export default function DocumentosClient({
                                         aria-expanded={providerOpen}
                                         className="flex w-full items-center justify-between rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                                     >
-                                        <span className={currentProviderId ? 'text-foreground' : 'text-muted-foreground'}>
-                                            {currentProviderId
-                                                ? (providers.find(p => p.id === currentProviderId)?.name ?? 'Proveedor desconocido')
+                                        <span className={selectedProviderId ? 'text-foreground' : 'text-muted-foreground'}>
+                                            {selectedProviderId
+                                                ? (providers.find(p => p.id === selectedProviderId)?.name ?? 'Proveedor desconocido')
                                                 : 'Buscar proveedor...'}
                                         </span>
                                         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                                     </button>
                                 </PopoverTrigger>
                                 <PopoverContent className="w-[280px] p-0" align="start">
-                                    <Command>
-                                        <CommandInput placeholder="Escribir nombre..." />
+                                    <Command shouldFilter={false}>
+                                        <CommandInput
+                                            placeholder="Escribir nombre..."
+                                            value={providerSearch}
+                                            onValueChange={setProviderSearch}
+                                        />
                                         <CommandList>
                                             <CommandEmpty>Sin resultados</CommandEmpty>
                                             <CommandGroup>
-                                                {currentProviderId && (
+                                                {selectedProviderId && (
                                                     <CommandItem
                                                         value="__todos__"
                                                         onSelect={() => {
+                                                            setSelectedProviderId('')
                                                             navigate({ provider_id: null })
                                                             setProviderOpen(false)
+                                                            setProviderSearch('')
                                                         }}
                                                     >
                                                         <X className="mr-2 h-4 w-4 opacity-70" />
                                                         Todos los proveedores
                                                     </CommandItem>
                                                 )}
-                                                {providers.map(p => (
-                                                    <CommandItem
-                                                        key={p.id}
-                                                        value={p.name}
-                                                        onSelect={() => {
-                                                            navigate({ provider_id: p.id === currentProviderId ? null : p.id })
-                                                            setProviderOpen(false)
-                                                        }}
-                                                    >
-                                                        <Check className={`mr-2 h-4 w-4 ${p.id === currentProviderId ? 'opacity-100' : 'opacity-0'}`} />
-                                                        {p.name}
-                                                    </CommandItem>
-                                                ))}
+                                                {providers
+                                                    .filter(p => p.name.toLowerCase().includes(providerSearch.toLowerCase()))
+                                                    .map(p => (
+                                                        <CommandItem
+                                                            key={p.id}
+                                                            value={p.id}
+                                                            onSelect={() => {
+                                                                const newId = p.id === selectedProviderId ? null : p.id
+                                                                setSelectedProviderId(newId ?? '')
+                                                                navigate({ provider_id: newId })
+                                                                setProviderOpen(false)
+                                                                setProviderSearch('')
+                                                            }}
+                                                        >
+                                                            <Check className={`mr-2 h-4 w-4 ${p.id === selectedProviderId ? 'opacity-100' : 'opacity-0'}`} />
+                                                            {p.name}
+                                                        </CommandItem>
+                                                    ))}
                                             </CommandGroup>
                                         </CommandList>
                                     </Command>
@@ -411,10 +451,11 @@ export default function DocumentosClient({
                             <input
                                 id="filter-docnum"
                                 type="text"
-                                defaultValue={currentDocNumber}
+                                value={docNumberInput}
                                 placeholder="Buscar número..."
                                 onChange={(e) => {
                                     const val = e.target.value
+                                    setDocNumberInput(val)
                                     if (docNumberDebounceRef.current) clearTimeout(docNumberDebounceRef.current)
                                     docNumberDebounceRef.current = setTimeout(() => navigate({ document_number: val || null }), 350)
                                 }}
@@ -430,8 +471,8 @@ export default function DocumentosClient({
                             <input
                                 id="filter-date-from"
                                 type="date"
-                                defaultValue={currentDateFrom}
-                                onChange={(e) => navigate({ date_from: e.target.value || null })}
+                                value={dateFromInput}
+                                onChange={(e) => { setDateFromInput(e.target.value); navigate({ date_from: e.target.value || null }) }}
                                 className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                             />
                         </div>
@@ -444,13 +485,13 @@ export default function DocumentosClient({
                             <input
                                 id="filter-date-to"
                                 type="date"
-                                defaultValue={currentDateTo}
-                                onChange={(e) => navigate({ date_to: e.target.value || null })}
+                                value={dateToInput}
+                                onChange={(e) => { setDateToInput(e.target.value); navigate({ date_to: e.target.value || null }) }}
                                 className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                             />
                         </div>
 
-                        {/* Amount min — own debounce ref */}
+                        {/* Amount min — applies on blur to avoid race conditions */}
                         <div>
                             <label htmlFor="filter-amount-min" className="mb-1 block text-xs font-medium text-muted-foreground">
                                 Importe mínimo
@@ -460,13 +501,10 @@ export default function DocumentosClient({
                                 type="number"
                                 min="0"
                                 step="0.01"
-                                defaultValue={currentAmountMin}
+                                value={amountMinInput}
                                 placeholder="0.00"
-                                onChange={(e) => {
-                                    const val = e.target.value
-                                    if (amountMinDebounceRef.current) clearTimeout(amountMinDebounceRef.current)
-                                    amountMinDebounceRef.current = setTimeout(() => navigate({ amount_min: val || null }), 350)
-                                }}
+                                onChange={(e) => setAmountMinInput(e.target.value)}
+                                onBlur={(e) => navigate({ amount_min: e.target.value || null })}
                                 className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                             />
                         </div>
@@ -481,13 +519,10 @@ export default function DocumentosClient({
                                 type="number"
                                 min="0"
                                 step="0.01"
-                                defaultValue={currentAmountMax}
+                                value={amountMaxInput}
                                 placeholder="Sin límite"
-                                onChange={(e) => {
-                                    const val = e.target.value
-                                    if (amountMaxDebounceRef.current) clearTimeout(amountMaxDebounceRef.current)
-                                    amountMaxDebounceRef.current = setTimeout(() => navigate({ amount_max: val || null }), 350)
-                                }}
+                                onChange={(e) => setAmountMaxInput(e.target.value)}
+                                onBlur={(e) => navigate({ amount_max: e.target.value || null })}
                                 className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                             />
                         </div>
@@ -563,9 +598,16 @@ export default function DocumentosClient({
                                         className="border-b border-border last:border-0 hover:bg-accent/30 transition-colors"
                                     >
                                         <td className="px-4 py-3">
-                                            <Badge variant="outline" className={`text-xs ${docTypeBadgeClass(doc.doc_type)}`}>
-                                                {doc.doc_type ?? '—'}
-                                            </Badge>
+                                            <div className="flex flex-col gap-1">
+                                                <Badge variant="outline" className={`text-xs w-fit ${docTypeBadgeClass(doc.doc_type)}`}>
+                                                    {doc.doc_type ?? '—'}
+                                                </Badge>
+                                                {doc.parent_invoice_id && (
+                                                    <Badge variant="outline" className="text-xs w-fit border-purple-200 bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-300 dark:border-purple-800">
+                                                        Conciliado
+                                                    </Badge>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="px-4 py-3 font-mono text-xs tabular-nums">
                                             {doc.document_number ?? <span className="text-muted-foreground">—</span>}

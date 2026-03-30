@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Pizca — ERP Gastronómico",
+  title: "Pizca App",
   description: "SaaS Gastronómico para gestión de recetas y producción",
 };
 
@@ -26,9 +26,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className="h-full overflow-hidden">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased h-full overflow-hidden`}
       >
         <NextTopLoader
           color="#16a34a"

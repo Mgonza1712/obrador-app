@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { ChevronDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,6 +25,12 @@ import {
 import { createAssembly, updateAssembly } from "@/lib/actions/escandallo.actions";
 import type { AssemblyWithFinancials } from "@/lib/types/escandallo.types";
 
+const ALERGENOS_EU = [
+  'Gluten', 'Crustáceos', 'Huevos', 'Pescado', 'Cacahuetes',
+  'Soja', 'Lácteos', 'Frutos secos', 'Apio', 'Mostaza',
+  'Sésamo', 'Sulfitos', 'Altramuces', 'Moluscos',
+];
+
 const ASSEMBLY_CATEGORIES = [
   "Entrante",
   "Primer plato",
@@ -42,9 +48,10 @@ const YIELD_UNITS = ["ud", "kg", "g", "l", "ml", "ración", "porción"];
 
 interface Props {
   assembly?: AssemblyWithFinancials;
+  suggestedAllergens?: string[];
 }
 
-export default function AssemblyForm({ assembly }: Props) {
+export default function AssemblyForm({ assembly, suggestedAllergens }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
@@ -63,7 +70,23 @@ export default function AssemblyForm({ assembly }: Props) {
   const [bufferPct, setBufferPct] = useState(assembly?.buffer_pct ?? 5);
   const [notes, setNotes] = useState(assembly?.notes ?? "");
   const [isActive, setIsActive] = useState(assembly?.is_active ?? true);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [allergens, setAllergens] = useState<string[]>((assembly as any)?.allergens ?? []);
+  const [allergenOpen, setAllergenOpen] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!suggestedAllergens || suggestedAllergens.length === 0) return;
+    setAllergens((prev) => [...new Set([...prev, ...suggestedAllergens])]);
+    setAllergenOpen(true);
+  }, [suggestedAllergens]);
+
+  const previewMargin = useMemo(() => {
+    const pvp = parseFloat(salePrice);
+    const cogs = assembly?.cogs ?? 0;
+    if (!pvp || pvp <= 0 || !cogs) return null;
+    return ((pvp - cogs) / pvp) * 100;
+  }, [salePrice, assembly?.cogs]);
 
   function validate(): boolean {
     const newErrors: Record<string, string> = {};
@@ -90,6 +113,7 @@ export default function AssemblyForm({ assembly }: Props) {
       buffer_pct: bufferPct,
       notes: notes || null,
       is_active: isActive,
+      allergens,
     };
 
     startTransition(async () => {
@@ -97,6 +121,7 @@ export default function AssemblyForm({ assembly }: Props) {
         const result = await updateAssembly(assembly.id, formData);
         if (result.success) {
           toast.success("Escandallo actualizado correctamente");
+          router.push("/escandallos");
         } else {
           toast.error(result.error);
         }
@@ -179,6 +204,19 @@ export default function AssemblyForm({ assembly }: Props) {
           />
           {errors.salePrice && (
             <p className="text-xs text-destructive">{errors.salePrice}</p>
+          )}
+          {previewMargin !== null && (
+            <p
+              className={`text-xs font-medium ${
+                previewMargin >= marginTarget
+                  ? "text-green-600 dark:text-green-400"
+                  : previewMargin >= marginTarget * 0.8
+                  ? "text-yellow-600 dark:text-yellow-400"
+                  : "text-red-600 dark:text-red-400"
+              }`}
+            >
+              Margen estimado: {previewMargin.toFixed(1)}%
+            </p>
           )}
         </div>
 
@@ -273,6 +311,81 @@ export default function AssemblyForm({ assembly }: Props) {
         />
       </div>
 
+      {/* Allergens — Collapsible */}
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={() => setAllergenOpen((o) => !o)}
+          className="flex w-full items-center justify-between rounded-md py-1 text-sm font-medium text-foreground"
+          disabled={isPending}
+        >
+          <span>
+            Alérgenos{allergens.length > 0 ? ` (${allergens.length})` : ""}
+          </span>
+          <ChevronDown
+            className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${
+              allergenOpen ? "rotate-180" : ""
+            }`}
+          />
+        </button>
+        {allergenOpen && (
+          <div className="space-y-3">
+            <div className="flex items-start justify-between gap-4">
+              <p className="text-xs text-muted-foreground">
+                Marca los 14 alérgenos de declaración obligatoria (UE) presentes en el plato.
+              </p>
+              <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                <button
+                  type="button"
+                  className="hover:text-foreground underline-offset-2 hover:underline"
+                  onClick={() => setAllergens([...ALERGENOS_EU])}
+                  disabled={isPending}
+                >
+                  Seleccionar todos
+                </button>
+                <span>|</span>
+                <button
+                  type="button"
+                  className="hover:text-foreground underline-offset-2 hover:underline"
+                  onClick={() => setAllergens([])}
+                  disabled={isPending}
+                >
+                  Limpiar
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {ALERGENOS_EU.map((alergeno) => {
+                const checked = allergens.includes(alergeno);
+                return (
+                  <label
+                    key={alergeno}
+                    className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
+                      checked
+                        ? "border-primary bg-primary/5 text-foreground"
+                        : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                    } ${isPending ? "pointer-events-none opacity-50" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 accent-primary"
+                      checked={checked}
+                      disabled={isPending}
+                      onChange={() =>
+                        setAllergens((prev) =>
+                          checked ? prev.filter((a) => a !== alergeno) : [...prev, alergeno]
+                        )
+                      }
+                    />
+                    {alergeno}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Notes */}
       <div className="space-y-1.5">
         <Label htmlFor="notes">Notas</Label>
@@ -280,7 +393,7 @@ export default function AssemblyForm({ assembly }: Props) {
           id="notes"
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
-          placeholder="Observaciones, alérgenos, instrucciones especiales..."
+          placeholder="Observaciones, instrucciones especiales de preparación..."
           rows={3}
           disabled={isPending}
         />

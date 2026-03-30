@@ -677,16 +677,16 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
 
                         {duplicateError && (
                             <div ref={errorRef} className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
-                                <p className="font-medium text-red-800">Este documento ya fue aprobado anteriormente.</p>
+                                <p className="font-medium text-red-800">Este documento ya fue procesado y está aprobado.</p>
                                 <div className="mt-2 flex flex-wrap items-center gap-4">
                                     {duplicateError.existingDocumentId && (
                                         <a
-                                            href={`/admin/revision/${duplicateError.existingDocumentId}`}
+                                            href={`/documentos/${duplicateError.existingDocumentId}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="flex items-center gap-1 text-red-700 underline hover:text-red-900"
                                         >
-                                            Ver documento original <ExternalLink className="h-3.5 w-3.5" />
+                                            Ver documento original → <ExternalLink className="h-3.5 w-3.5" />
                                         </a>
                                     )}
                                     <button

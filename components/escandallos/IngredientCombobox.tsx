@@ -56,7 +56,13 @@ export default function IngredientCombobox({
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[340px] p-0" align="start">
-        <Command>
+        <Command
+          filter={(value, search) => {
+            const normalize = (str: string) =>
+              str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+            return normalize(value).includes(normalize(search)) ? 1 : 0;
+          }}
+        >
           <CommandInput placeholder="Buscar ingrediente..." />
           <CommandList>
             <CommandEmpty>No se encontraron resultados.</CommandEmpty>

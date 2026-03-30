@@ -24,13 +24,14 @@ import {
   deleteBomLine,
   reorderBomLines,
 } from "@/lib/actions/escandallo.actions";
-import { getCompatibleUnits } from "@/lib/utils/unit-conversion";
+import { getCompatibleUnits, normalizeQuantity, UNIT_CONVERSIONS } from "@/lib/utils/unit-conversion";
 import type { BomLineExpanded, IngredientOption } from "@/lib/types/escandallo.types";
 
 interface Props {
   assemblyId: string;
   initialLines: BomLineExpanded[];
   ingredientOptions: IngredientOption[];
+  onIngredientAdded?: (name: string) => void;
 }
 
 // Extend BomLineExpanded with display fields (added in last migration, may not be in types yet)
@@ -50,6 +51,7 @@ export default function BomLineEditor({
   assemblyId,
   initialLines,
   ingredientOptions,
+  onIngredientAdded,
 }: Props) {
   const [lines, setLines] = useState<LocalLine[]>(
     initialLines.map((l) => ({
@@ -96,6 +98,16 @@ export default function BomLineEditor({
     const localId = newLocalId();
     const sortOrder = lines.length;
     const qty = Number(newQty);
+    const waste = Number(newWaste);
+
+    // Normalize display qty → base unit for correct line_cost preview
+    let normalizedQtyForCost = qty;
+    try {
+      const { normalizedQty: nq } = normalizeQuantity(qty, newUnit, newIngredient.baseUnit);
+      normalizedQtyForCost = nq;
+    } catch {
+      // incompatible units — keep raw qty
+    }
 
     const optimistic: LocalLine = {
       _localId: localId,
@@ -113,10 +125,12 @@ export default function BomLineEditor({
       unit: newUnit,
       display_quantity: qty,
       display_unit: newUnit,
-      waste_pct: Number(newWaste),
+      waste_pct: waste,
       sort_order: sortOrder,
       unit_cost: newIngredient.unitCost,
-      line_cost: newIngredient.unitCost > 0 ? newIngredient.unitCost * qty : null,
+      line_cost: newIngredient.unitCost > 0
+        ? newIngredient.unitCost * normalizedQtyForCost * (1 + waste / 100)
+        : null,
       sub_assembly_cogs: null,
       sub_assembly_line_cost: null,
       line_type: newIngredient.type,
@@ -124,6 +138,7 @@ export default function BomLineEditor({
     };
 
     setLines((prev) => [...prev, optimistic]);
+    onIngredientAdded?.(newIngredient.name);
     setNewIngredient(null);
     setNewQty("");
     setNewUnit("ud");
@@ -136,7 +151,7 @@ export default function BomLineEditor({
         ingredientBaseUnit: newIngredient.baseUnit,
         quantity: qty,
         unit: newUnit,
-        wastePct: Number(newWaste),
+        wastePct: waste,
         sortOrder: sortOrder,
       });
 
@@ -187,6 +202,30 @@ export default function BomLineEditor({
     });
   }
 
+  function handleUpdateUnit(localId: string, lineId: string | null, newDisplayUnit: string) {
+    const line = lines.find((l) => l._localId === localId);
+    if (!line) return;
+    const baseQty = line.quantity ?? 0;
+    const newFactor = UNIT_CONVERSIONS[newDisplayUnit]?.factor ?? 1;
+    const newDisplayQty = newFactor !== 0 ? baseQty / newFactor : baseQty;
+
+    setLines((prev) =>
+      prev.map((l) =>
+        l._localId === localId
+          ? { ...l, display_unit: newDisplayUnit, display_quantity: newDisplayQty }
+          : l
+      )
+    );
+    if (!lineId) return;
+    startTransition(async () => {
+      const result = await updateBomLine(lineId, {
+        display_unit: newDisplayUnit,
+        display_quantity: newDisplayQty,
+      });
+      if (!result.success) toast.error(result.error);
+    });
+  }
+
   function handleDeleteLine(localId: string, lineId: string | null) {
     setLines((prev) => prev.filter((l) => l._localId !== localId));
     if (!lineId) return;
@@ -230,7 +269,7 @@ export default function BomLineEditor({
 
   return (
     <div className="rounded-lg border">
-      <div className="overflow-x-auto">
+      <div>
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
@@ -299,8 +338,23 @@ export default function BomLineEditor({
                     disabled={isPending || l._pending}
                   />
                 </td>
-                <td className="px-3 py-2 text-center text-muted-foreground">
-                  {dispUnit(l)}
+                <td className="px-3 py-2 text-center">
+                  <Select
+                    value={dispUnit(l)}
+                    onValueChange={(val) => handleUpdateUnit(l._localId, l.id, val)}
+                    disabled={isPending || l._pending}
+                  >
+                    <SelectTrigger className="h-7 w-20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {getCompatibleUnits(l.base_unit ?? "ud").map((u) => (
+                        <SelectItem key={u} value={u}>
+                          {u}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </td>
                 <td className="px-3 py-2">
                   <Tooltip>
@@ -312,6 +366,24 @@ export default function BomLineEditor({
                           max="100"
                           step="0.5"
                           defaultValue={l.waste_pct ?? 0}
+                          onChange={(e) => {
+                            const num = Number(e.target.value);
+                            if (isNaN(num)) return;
+                            setLines((prev) =>
+                              prev.map((ln) =>
+                                ln._localId === l._localId
+                                  ? {
+                                      ...ln,
+                                      waste_pct: num,
+                                      line_cost:
+                                        ln.unit_cost != null
+                                          ? (ln.quantity ?? 0) * ln.unit_cost * (1 + num / 100)
+                                          : ln.line_cost,
+                                    }
+                                  : ln
+                              )
+                            );
+                          }}
                           onBlur={(e) =>
                             handleUpdateWaste(l._localId, l.id, e.target.value)
                           }

@@ -9,6 +9,8 @@ const SORT_MAP: Record<string, { column: string; ascending: boolean }> = {
     date_asc:  { column: 'document_date', ascending: true },
     total_desc: { column: 'total_amount', ascending: false },
     total_asc:  { column: 'total_amount', ascending: true },
+    number_desc: { column: 'document_number', ascending: false },
+    number_asc:  { column: 'document_number', ascending: true },
     created_desc: { column: 'created_at', ascending: false },
 }
 

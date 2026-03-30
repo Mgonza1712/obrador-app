@@ -340,11 +340,11 @@ export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) 
             {/* Back navigation */}
             <div className="flex items-center gap-3">
                 <Link
-                    href="/documentos"
+                    href={doc.parent_invoice_id ? `/documentos/${doc.parent_invoice_id}` : '/documentos'}
                     className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
                 >
                     <ArrowLeft className="h-4 w-4" />
-                    Documentos
+                    {doc.parent_invoice_id ? 'Volver a Factura Resumen' : 'Documentos'}
                 </Link>
             </div>
 
@@ -476,6 +476,43 @@ export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) 
                 </div>
             </section>
 
+            {/* Albaranes vinculados — shown on Factura Resumen that has linked albaranes */}
+            {doc.linkedAlbaranes.length > 0 && (
+                <section className="rounded-lg border border-border bg-card p-5 space-y-3">
+                    <h2 className="text-base font-semibold">Albaranes vinculados</h2>
+                    <div className="divide-y divide-border rounded-md border border-border overflow-hidden">
+                        {doc.linkedAlbaranes.map((a) => (
+                            <Link
+                                key={a.id}
+                                href={`/documentos/${a.id}`}
+                                className="flex items-center justify-between px-4 py-3 hover:bg-accent/30 transition-colors"
+                            >
+                                <span className="text-sm font-medium">
+                                    {a.document_number ?? <span className="text-muted-foreground italic">Sin número</span>}
+                                </span>
+                                <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                                    {a.document_date && (
+                                        <span>
+                                            {new Date(a.document_date + 'T12:00:00').toLocaleDateString('es-ES', {
+                                                day: '2-digit',
+                                                month: 'short',
+                                                year: 'numeric',
+                                            })}
+                                        </span>
+                                    )}
+                                    {a.total_amount != null && (
+                                        <span className="tabular-nums">
+                                            {a.total_amount.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                                        </span>
+                                    )}
+                                    <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                                </div>
+                            </Link>
+                        ))}
+                    </div>
+                </section>
+            )}
+
             {/* Reconciliation panel */}
             {showReconciliation && (
                 <ReconciliationPanel
@@ -485,7 +522,8 @@ export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) 
                     reconciliationDelta={doc.reconciliation_delta}
                     referencedNotes={doc.referenced_delivery_notes}
                     linkedAlbaranes={doc.linkedAlbaranes}
-                    invoiceTotal={doc.total_amount}
+                    invoiceTotal={totalAmount !== '' && !isNaN(Number(totalAmount)) ? Number(totalAmount) : doc.total_amount ?? null}
+                    purchaseLinesTotal={linesSubtotal}
                 />
             )}
 

@@ -56,7 +56,7 @@ export default function Sidebar() {
                 </div>
 
                 {/* Nav — scrollable if many items, but never pushes session section out */}
-                <nav className="flex flex-1 flex-col gap-1 min-h-0">
+                <nav className="flex flex-1 flex-col gap-1 min-h-0 overflow-y-auto">
                     {navItems.map(({ label, href, icon: Icon }) => (
                         <Link
                             key={href}
