@@ -3,7 +3,7 @@
 This file provides strict guidance to Claude Code (claude.ai/code) when working with the "Obrador App" repository.
 
 ## 1. Project Overview
-**Obrador App** — SaaS ERP gastronómico multi-tenant para gestión financiera, compras automatizadas por IA (n8n) y coste de escandallos en tiempo real. 
+**Pizca** (formerly Obrador App) — SaaS ERP gastronómico multi-tenant para gestión financiera, compras automatizadas por IA y coste de escandallos en tiempo real. Desarrollado por WeScaleOps. Cliente actual: Grupo 78 Sabores (3 locales: Biergarten by 78, Cafeseamos, 78 Sabores y Copas).
 
 ### Commands
 ```bash
@@ -11,100 +11,137 @@ npm run dev       # Start dev server (uses Turbopack)
 npm run build     # Production build
 npm run start     # Start production server
 npm run lint      # Run ESLint
+```
 
-2. Tech Stack & Architecture
-Framework: Next.js (App Router, React Server Components) + TypeScript.
+## 2. Tech Stack & Architecture
 
-Backend/DB: Supabase (PostgreSQL, Auth, Storage).
+### Web App (este repo)
+- **Framework:** Next.js (App Router, React Server Components) + TypeScript
+- **Backend/DB:** Supabase (PostgreSQL, Auth, Storage) — proyecto: `anszcyixjopxnskpxewg`, región: `eu-west-1`
+  - Browser client: `lib/supabase/client.ts`
+  - Server client: `lib/supabase/server.ts` — exporta `createClient` (no `createServerClient`)
+- **Styling:** Tailwind CSS v4 (OKLCH color system, dark mode)
+- **UI Components:** shadcn/ui (new-york style) + Lucide Icons
+- **Deploy:** Vercel (automático desde rama `main` del repo `Mgonza1712/obrador-app`)
 
-Browser client: lib/supabase/client.ts
+### Servidor Oracle (infraestructura separada)
+- **Automatización:** n8n (orquestador de triggers e integraciones)
+- **Extractor de documentos:** microservicio FastAPI en `~/pizca-server/pizca-extractor/` — puerto 8001
+- **Mensajería:** Evolution API (WhatsApp)
+- **Reverse proxy:** Caddy
+- **Repo del servidor:** `github.com/Mgonza1712/pizca-server` (privado)
+- Deploy automático vía GitHub Actions al hacer push a `main`
 
-Server client: lib/supabase/server.ts
+## 3. Route Structure
 
-Styling: Tailwind CSS v4 (OKLCH color system, dark mode).
+### Core ERP (Dashboard)
+```
+app/(dashboard)/                    — Layout principal del dashboard
+app/(dashboard)/escandallos/        — Motor financiero de costes. CRUD de platos y sub-recetas
+app/(dashboard)/documentos/         — Historial y conciliación de facturas/albaranes
+app/(dashboard)/catalogo/           — Catálogo activo con proveedor preferido por producto
+app/(dashboard)/proveedores/        — Gestión de proveedores, métricas y fusión de duplicados
+app/(dashboard)/alertas-rentabilidad/ — Panel de notificaciones financieras
+app/admin/revision/                 — UI de control humano para facturas que la IA no aprobó
+```
 
-UI Components: shadcn/ui (new-york style) + Lucide Icons.
+### V1 / Legacy (a migrar)
+```
+app/recetario/   — (Legacy) Calculadora de escalado. Migrar a usar assemblies
+app/fichas/      — (Legacy) SOPs visuales. Migrar a usar assemblies
+```
 
-3. Route Structure
-Core ERP (Dashboard)
-app/(dashboard)/ — Route group sharing the main dashboard layout.
+### Auth
+```
+app/login/ + app/auth/callback/  — Supabase auth flow. Middlewares protegen rutas y validan JWTs
+```
 
-app/(dashboard)/escandallos/ — [NUEVO] Motor financiero de costes. CRUD de platos y sub-recetas.
+## 4. Database Schema & Multi-Tenancy
 
-app/(dashboard)/documentos/ — [NUEVO] Historial y conciliación de facturas/albaranes.
+### Multi-tenancy & RLS
+**CRÍTICO:** RLS está HABILITADO en todas las tablas de negocio.
+- Todos los datos están filtrados por `tenant_id` (vinculado a `erp_tenants`)
+- Los perfiles (`profiles`) vinculan `auth.users` a un `tenant_id` y `venue_id`
+- El cliente autenticado de Supabase pasa el JWT automáticamente — PostgreSQL filtra invisiblemente
+- Las Server Actions DEBEN ejecutarse con el cliente servidor autenticado (`createClient` de `lib/supabase/server.ts`)
 
-app/(dashboard)/catalogo/ — Catálogo activo con el proveedor preferido para cada producto.
+### Dominio: Compras & Catálogo
+```
+erp_documents        — Cabeceras de facturas/albaranes/presupuestos
+erp_purchase_lines   — Líneas de cada documento
+erp_master_items     — Catálogo único de materias primas
+                       base_unit válidos: 'ml', 'g', 'ud'
+                       category válidos: 'Bebidas Alcohólicas', 'Bebidas Sin Alcohol',
+                       'Alimentos Secos', 'Alimentos Frescos', 'Lácteos',
+                       'Limpieza', 'Descartables', 'Otros'
+erp_item_aliases     — Diccionario de nombres/formatos por proveedor para cada master_item
+                       Campos: raw_name, provider_id, master_item_id, unidad_precio,
+                       unidades_por_pack, cantidad_por_unidad, conversion_multiplier, formato
+erp_price_history    — Historial inmutable de precios
+                       status válidos: 'active', 'archived', 'quote', 'inactive'
+                       'quote' = cotización recibida, sin compra real (para comparativas)
+erp_providers        — channel válidos: 'email', 'whatsapp', 'telegram', 'telefono'
+                       is_trusted: activa auto-aprobación si todos los items tienen alias
+extraction_logs      — Registro de cada documento procesado por el extractor FastAPI
+extraction_corrections — Correcciones humanas sobre lo que infirió el LLM (dataset futuro)
+```
 
-app/(dashboard)/proveedores/ — Gestión de proveedores, métricas y fusión de duplicados.
+### Dominio: Escandallos (Motor Financiero)
+```
+assemblies           — Platos, sub-recetas o preparaciones finales
+bom_lines            — Ingredientes. FK mutuamente excluyentes:
+                       component_id (materia prima) XOR sub_assembly_id (sub-receta)
+                       Usa waste_pct para merma individual, display_quantity/display_unit para UI
+components           — Puente entre un master_item y el tenant
+unit_conversions     — Tabla de conversiones para normalizar unidades
+cost_alerts          — Alertas de inflación y margen
+```
 
-app/(dashboard)/alertas-rentabilidad/ — Panel de notificaciones financieras.
+### Lógica de venue por tipo de documento
+- **Presupuesto/Cotización** → siempre Sede Central (venue genérico)
+- **Albarán** → detectar `local_receptor` (shared_pricing NO aplica)
+- **Factura** → si `shared_pricing=true` → Sede Central; si `false` → detectar `local_receptor`
 
-app/admin/revision/ — UI de control humano para facturas que la IA no pudo aprobar.
+## 5. Backend Business Rules (NO RE-IMPLEMENTAR EN FRONTEND)
 
-V1 / Legacy (To be refactored)
-app/recetario/ — (Legacy) Obrador scaling calculator. Must be migrated to use assemblies.
+### Escandallos — Cálculo de Costes en Cascada (COGS)
+**NUNCA calcules matemáticas en el frontend.** PostgreSQL maneja todo via Triggers y Funciones Recursivas:
+- Cuando se aprueba un precio en `erp_price_history`, un trigger recalcula el coste en cascada de todos los `assemblies` afectados
+- PostgreSQL normaliza unidades automáticamente (1 kg → 1000 g)
+- El coste final (`cogs`) y margen (`margin_pct`) se leen de `assemblies` o vistas SQL (`assemblies_with_financials`)
+- **Precio para escandallos:** usar el último precio activo por `effective_date`, NO el del proveedor preferido
 
-app/fichas/ — (Legacy) Visual SOPs. Must be migrated to use assemblies.
+### Módulo de Compras — Flujo de ingesta
+La función RPC `procesar_factura_completa` maneja la entrada de documentos:
+- `draft` → va a revisión humana (`app/admin/revision/`)
+- `auto` → se aprueba sola si `is_trusted=true` Y todos los items tienen alias en `erp_item_aliases`
+- Si hay productos nuevos → fuerza `draft` independientemente de `is_trusted`
 
-Auth
-app/login/ + app/auth/callback/ — Supabase auth flow. Middlewares protect routes and validate JWTs.
+### Extractor FastAPI (nuevo en Fase 2B)
+El endpoint `POST http://[servidor]:8001/extract` recibe un PDF/imagen en base64 y devuelve JSON con scores de confianza. Pipeline de dos pasos:
+1. GPT-4o extrae fielmente (sin inferir)
+2. Matching contra `erp_item_aliases` → si hay alias, normalización sin LLM; si no, LLM infiere y guarda alias nuevo
 
-4. Database Schema & Multi-Tenancy
-Multi-tenancy & RLS (Row Level Security)
-CRITICAL: RLS is ENABLED for all business tables.
+**IMPORTANTE:** el extractor crea `erp_master_items` y `erp_item_aliases` directamente. El panel de revisión en `app/admin/revision/` debe mostrar items con `needs_review: true` del response del extractor.
 
-All data is scoped by tenant_id (linked to erp_tenants).
+### Storage (Documentos Seguros)
+El bucket `facturas` en Supabase S3 es PRIVADO.
+Para mostrar un PDF/imagen NUNCA uses la URL pública. Usa la Server Action `getSecureDocumentUrl` (usa `createSignedUrl` válida por 1 hora) antes de renderizar el iframe/img.
 
-User profiles (profiles table) link auth.users to a tenant_id and venue_id.
+## 6. Frontend Conventions & UX Rules
 
-Supabase's authenticated client automatically passes the JWT token; PostgreSQL filters the data invisibly. You rarely need to append WHERE tenant_id = X manually, but server actions MUST be executed with the authenticated server client (createServerClient).
+- **Server Actions First:** Mutations deben ir por `app/actions/` usando `"use server"`. Usar Zod para validación antes de tocar Supabase.
+- **UI Feedback (Toasts):** Siempre usar try/catch en server actions y mostrar mensajes con `sonner` o shadcn's `<Toaster />` (verde = éxito, rojo = error).
+- **Loading States (Suspense):** Cada ruta DEBE tener `loading.tsx` con skeleton loaders. Usar `useTransition` o `isPending` en todos los botones de submit (deshabilitarlos mientras se guarda).
+- **Relational Data (Combobox):** Para seleccionar relaciones (Proveedores, Productos, Ingredientes), usar ESTRICTAMENTE shadcn's `<Command>` + `<Popover>` (patrón Combobox). NUNCA usar `<select>` nativo para listas grandes.
+- **Debouncing:** En filtros client-side (Data Tables), hacer debounce del input antes de actualizar URL search params para no spamear la DB.
 
-Domain: Compras & Catálogo (Alimentado por n8n)
-erp_documents & erp_purchase_lines: Cabeceras e ítems de facturas/albaranes.
+## 7. Cómo mantener este archivo actualizado
 
-erp_master_items: Catálogo único de materias primas. Unidades base válidas: 'ml', 'g', 'ud'. Categorías estrictas (ej. 'Bebidas Alcohólicas', 'Alimentos Secos').
+Este archivo debe actualizarse al final de cada sesión de trabajo importante. El proceso:
+1. En Claude.ai (claude.ai/chat), al terminar una sesión, pedirle que genere un CLAUDE.md actualizado
+2. Claude Code lo aplica en VS Code con el contenido nuevo
+3. GitHub Desktop hace commit: `docs: update CLAUDE.md — [fecha]`
+4. Push a main → Vercel hace deploy automático
 
-erp_item_aliases: Diccionario de cómo cada proveedor llama/empaqueta a un master_item.
-
-erp_price_history: Historial inmutable de precios. El precio vigente es el que tiene status = 'active'.
-
-erp_providers: channel válidos ('email', 'whatsapp', 'telegram', 'telefono').
-
-Domain: Escandallos (Motor Financiero)
-assemblies: Platos, sub-recetas o preparaciones finales.
-
-bom_lines: Los ingredientes. Regla estricta: Tiene dos FK mutuamente excluyentes: component_id (materia prima pura) y sub_assembly_id (sub-recetas). Usa waste_pct para merma individual.
-
-components: Puente entre un master_item y el tenant.
-
-5. Backend Business Rules (DO NOT RE-IMPLEMENT IN FRONTEND)
-Escandallos: Cálculo de Costes en Cascada (COGS)
-NUNCA CALCULES MATEMÁTICAS EN EL FRONTEND. PostgreSQL se encarga de todo mediante Triggers y Funciones Recursivas:
-
-Cuando n8n aprueba un nuevo precio en erp_price_history, un trigger recalcula el coste en cascada de todos los assemblies afectados.
-
-PostgreSQL normaliza automáticamente unidades (Si el frontend envía 1 'kg', la DB lo multiplica por 1000 'g').
-
-El coste final (cogs) y el margen (margin_pct) se leen directamente de la tabla assemblies o vistas SQL (como assemblies_with_financials).
-
-Módulo de Compras (Flujo n8n)
-La función RPC procesar_factura_completa maneja la entrada de facturas desde Telegram:
-
-draft -> Va a revisión humana (app/admin/revision/).
-
-auto -> Se aprueba sola si el proveedor es confiable (is_trusted = true).
-
-Storage (Documentos Seguros)
-El bucket facturas en Supabase S3 es PRIVADO.
-Para mostrar un documento PDF o Imagen en la App, NUNCA uses la URL pública directa. Usa la Server Action getSecureDocumentUrl (que hace uso de createSignedUrl válida por 1 hora) antes de renderizar el iframe/img.
-
-6. Frontend Conventions & UX Rules
-Server Actions First: Mutations must go through app/actions/ using "use server". Use Zod for schema validation before touching Supabase.
-
-UI Feedback (Toasts): Always wrap server actions in try/catch and use sonner or shadcn's <Toaster /> to display success (green) or error (red) messages to the user.
-
-Loading States (Suspense): Every route MUST have a loading.tsx with skeleton loaders. Use useTransition or isPending states on all submit buttons (disable them while saving).
-
-Relational Data (Combobox): When selecting relationships (Providers, Products, Ingredients), STRICTLY use shadcn's <Command> + <Popover> (Combobox pattern) to allow searching. NEVER use native <select> tags for massive lists.
-
-Debouncing: When building client-side filters (e.g., Data Tables), debounce the input before updating URL search params to avoid spamming the database.
+**Criterio para actualizar:** cambios en schema de DB, nuevas rutas, nuevas Server Actions, nuevas reglas de negocio, cambios en la arquitectura general.
