@@ -25,7 +25,7 @@ export default async function RevisionPage() {
       erp_venues ( name ),
       erp_purchase_lines ( line_total_cost )
     `)
-        .eq('status', 'pending')
+        .in('status', ['pending', 'pending_review'])
         .order('created_at', { ascending: false })
 
     if (error) {

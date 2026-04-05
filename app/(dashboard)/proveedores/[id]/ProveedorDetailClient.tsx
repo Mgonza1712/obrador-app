@@ -40,7 +40,6 @@ export default function ProveedorDetailClient({ provider }: { provider: Proveedo
         channel: provider.channel ?? '',
         notes: provider.notes ?? '',
         shared_pricing: provider.shared_pricing ?? false,
-        is_trusted: provider.is_trusted ?? false,
         is_active: provider.is_active ?? true,
     })
     const [saved, setSaved] = useState(false)
@@ -66,7 +65,6 @@ export default function ProveedorDetailClient({ provider }: { provider: Proveedo
                     channel: form.channel || null,
                     notes: form.notes || null,
                     shared_pricing: form.shared_pricing,
-                    is_trusted: form.is_trusted,
                     is_active: form.is_active,
                 })
                 setSaved(true)
@@ -171,27 +169,6 @@ export default function ProveedorDetailClient({ provider }: { provider: Proveedo
                         <Toggle
                             checked={form.shared_pricing}
                             onChange={(v) => set('shared_pricing', v)}
-                        />
-                    </div>
-
-                    <div className="border-t border-border" />
-
-                    {/* is_trusted */}
-                    <div className="flex items-start justify-between gap-4">
-                        <div>
-                            <div className="flex items-center gap-2">
-                                <p className="text-sm font-medium">
-                                    Proveedor confiable
-                                </p>
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                                Los documentos se aprobarán automáticamente si no contienen productos
-                                nuevos.
-                            </p>
-                        </div>
-                        <Toggle
-                            checked={form.is_trusted}
-                            onChange={(v) => set('is_trusted', v)}
                         />
                     </div>
 

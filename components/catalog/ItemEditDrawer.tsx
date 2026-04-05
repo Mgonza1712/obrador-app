@@ -12,9 +12,9 @@ export type AliasEdit = {
     provider_id: string | null
     provider_name: string
     raw_name: string
-    unidades_por_pack: number
-    cantidad_por_unidad: number
-    formato: string
+    envases_por_formato: number
+    contenido_por_envase: number
+    formato_compra: string
     conversion_multiplier: number
 }
 
@@ -88,8 +88,8 @@ export default function ItemEditDrawer({ itemId, onClose, onSaved }: ItemEditDra
                 if (i !== index) return a
                 const updated = { ...a, [field]: value }
                 // Recalculate conversion_multiplier
-                const pack = field === 'unidades_por_pack' ? (value as number) : a.unidades_por_pack
-                const qty = field === 'cantidad_por_unidad' ? (value as number) : a.cantidad_por_unidad
+                const pack = field === 'envases_por_formato' ? (value as number) : a.envases_por_formato
+                const qty = field === 'contenido_por_envase' ? (value as number) : a.contenido_por_envase
                 updated.conversion_multiplier = pack * qty
                 return updated
             }),
@@ -109,9 +109,9 @@ export default function ItemEditDrawer({ itemId, onClose, onSaved }: ItemEditDra
                 baseUnit: baseUnit as 'ml' | 'g' | 'ud',
                 aliases: aliases.map((a) => ({
                     id: a.id,
-                    unidades_por_pack: a.unidades_por_pack,
-                    cantidad_por_unidad: a.cantidad_por_unidad,
-                    formato: a.formato,
+                    envases_por_formato: a.envases_por_formato,
+                    contenido_por_envase: a.contenido_por_envase,
+                    formato_compra: a.formato_compra,
                     conversion_multiplier: a.conversion_multiplier,
                 })),
             })
@@ -245,15 +245,15 @@ export default function ItemEditDrawer({ itemId, onClose, onSaved }: ItemEditDra
                                                             htmlFor={`${uid}-alias-${alias.id}-pack`}
                                                             className="mb-1 block text-xs font-medium text-muted-foreground"
                                                         >
-                                                            Unidades por pack
+                                                            Envases por formato
                                                         </label>
                                                         <input
                                                             id={`${uid}-alias-${alias.id}-pack`}
                                                             type="number"
                                                             min="0"
                                                             step="0.001"
-                                                            value={alias.unidades_por_pack}
-                                                            onChange={(e) => handleAliasChange(index, 'unidades_por_pack', parseFloat(e.target.value) || 0)}
+                                                            value={alias.envases_por_formato}
+                                                            onChange={(e) => handleAliasChange(index, 'envases_por_formato', parseFloat(e.target.value) || 0)}
                                                             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                                                         />
                                                     </div>
@@ -263,15 +263,15 @@ export default function ItemEditDrawer({ itemId, onClose, onSaved }: ItemEditDra
                                                             htmlFor={`${uid}-alias-${alias.id}-qty`}
                                                             className="mb-1 block text-xs font-medium text-muted-foreground"
                                                         >
-                                                            Cantidad por unidad
+                                                            Contenido por envase
                                                         </label>
                                                         <input
                                                             id={`${uid}-alias-${alias.id}-qty`}
                                                             type="number"
                                                             min="0"
                                                             step="0.001"
-                                                            value={alias.cantidad_por_unidad}
-                                                            onChange={(e) => handleAliasChange(index, 'cantidad_por_unidad', parseFloat(e.target.value) || 0)}
+                                                            value={alias.contenido_por_envase}
+                                                            onChange={(e) => handleAliasChange(index, 'contenido_por_envase', parseFloat(e.target.value) || 0)}
                                                             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                                                         />
                                                     </div>
@@ -281,14 +281,14 @@ export default function ItemEditDrawer({ itemId, onClose, onSaved }: ItemEditDra
                                                             htmlFor={`${uid}-alias-${alias.id}-fmt`}
                                                             className="mb-1 block text-xs font-medium text-muted-foreground"
                                                         >
-                                                            Formato
+                                                            Formato de compra
                                                         </label>
                                                         <input
                                                             id={`${uid}-alias-${alias.id}-fmt`}
                                                             type="text"
-                                                            value={alias.formato}
-                                                            onChange={(e) => handleAliasChange(index, 'formato', e.target.value)}
-                                                            placeholder="Ej: 500ml, 1kg..."
+                                                            value={alias.formato_compra}
+                                                            onChange={(e) => handleAliasChange(index, 'formato_compra', e.target.value)}
+                                                            placeholder="Ej: Caja, Barril, Unidad..."
                                                             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                                                         />
                                                     </div>

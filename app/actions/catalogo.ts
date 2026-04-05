@@ -18,7 +18,7 @@ export async function getItemWithAliases(itemId: string): Promise<ItemEditData |
             .single(),
         supabase
             .from('erp_item_aliases')
-            .select('id, provider_id, raw_name, unidades_por_pack, cantidad_por_unidad, formato, conversion_multiplier, erp_providers(name)')
+            .select('id, provider_id, raw_name, envases_por_formato, contenido_por_envase, formato_compra, conversion_multiplier, erp_providers(name)')
             .eq('master_item_id', itemId)
             .order('id'),
     ])
@@ -32,10 +32,10 @@ export async function getItemWithAliases(itemId: string): Promise<ItemEditData |
         provider_id: a.provider_id,
         provider_name: a.erp_providers?.name ?? 'Proveedor desconocido',
         raw_name: a.raw_name ?? '',
-        unidades_por_pack: a.unidades_por_pack ?? 1,
-        cantidad_por_unidad: a.cantidad_por_unidad ?? 1,
-        formato: a.formato ?? '',
-        conversion_multiplier: a.conversion_multiplier ?? (a.unidades_por_pack ?? 1) * (a.cantidad_por_unidad ?? 1),
+        envases_por_formato: a.envases_por_formato ?? 1,
+        contenido_por_envase: a.contenido_por_envase ?? 1,
+        formato_compra: a.formato_compra ?? '',
+        conversion_multiplier: a.conversion_multiplier ?? (a.envases_por_formato ?? 1) * (a.contenido_por_envase ?? 1),
     }))
 
     return {
@@ -56,9 +56,9 @@ const UpdateItemSchema = z.object({
     baseUnit: z.enum(['ml', 'g', 'ud']),
     aliases: z.array(z.object({
         id: z.string().uuid(),
-        unidades_por_pack: z.number().nonnegative(),
-        cantidad_por_unidad: z.number().nonnegative(),
-        formato: z.string(),
+        envases_por_formato: z.number().nonnegative(),
+        contenido_por_envase: z.number().nonnegative(),
+        formato_compra: z.string(),
         conversion_multiplier: z.number().nonnegative(),
     })),
 })
@@ -88,9 +88,9 @@ export async function updateItemMetadata(input: UpdateItemInput): Promise<Action
         const { error } = await supabase
             .from('erp_item_aliases')
             .update({
-                unidades_por_pack: alias.unidades_por_pack,
-                cantidad_por_unidad: alias.cantidad_por_unidad,
-                formato: alias.formato || null,
+                envases_por_formato: alias.envases_por_formato,
+                contenido_por_envase: alias.contenido_por_envase,
+                formato_compra: alias.formato_compra || null,
                 conversion_multiplier: alias.conversion_multiplier,
             })
             .eq('id', alias.id)

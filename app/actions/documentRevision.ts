@@ -12,6 +12,7 @@ interface DocumentRevisionPayload {
         document_date: string | null
         total_amount: number | null
         venue_id: string | null
+        activate_prices: boolean  // presupuestos → active si true, quote si false
         provider_resolution:
         | { action: 'skip' }
         | { action: 'link_existing'; provider_id: string }
@@ -22,11 +23,13 @@ interface DocumentRevisionPayload {
         quantity: number
         unit_price: number | null
         line_total_cost: number
-        unidad_precio: string
-        unidades_por_pack: number
-        cantidad_por_unidad: number
-        formato: string
+        formato_compra: string
+        envases_por_formato: number
+        contenido_por_envase: number
         raw_name: string | null
+        review_status?: string | null
+        ai_interpretation?: Record<string, unknown> | null
+        is_preferred: boolean
         resolution:
         | { action: 'skip' }
         | { action: 'link_existing'; master_item_id: string }
@@ -73,6 +76,13 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
         // ── 2. Duplicate validation (server-side) ──
         // Skip for presupuestos/cotizaciones — they never have a definitive document number
         const docTypeNorm = payload.document.doc_type?.toLowerCase()
+
+        // Determinar status para price_history:
+        // - Facturas y albaranes → siempre 'active'
+        // - Presupuestos → 'quote' por defecto, 'active' si el operario activó el toggle
+        const priceHistoryStatus = (docTypeNorm === 'presupuesto' && !payload.document.activate_prices)
+            ? 'quote'
+            : 'active'
         if (docTypeNorm !== 'presupuesto' && finalProviderId && payload.document.document_number) {
             const { data: dupes } = await supabase
                 .from('erp_documents')
@@ -133,7 +143,7 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
 
             // --- Step B: Upsert Alias (learning engine) ---
             if (finalMasterItemId && finalProviderId && line.raw_name) {
-                const conversion_multiplier = line.unidades_por_pack * line.cantidad_por_unidad
+                const conversion_multiplier = line.envases_por_formato * line.contenido_por_envase
 
                 const { data: existingAlias } = await supabase
                     .from('erp_item_aliases')
@@ -146,10 +156,9 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                     provider_id: finalProviderId,
                     raw_name: line.raw_name,
                     master_item_id: finalMasterItemId,
-                    unidad_precio: line.unidad_precio,
-                    unidades_por_pack: line.unidades_por_pack,
-                    cantidad_por_unidad: line.cantidad_por_unidad,
-                    formato: line.formato || null,
+                    formato_compra: line.formato_compra,
+                    envases_por_formato: line.envases_por_formato,
+                    contenido_por_envase: line.contenido_por_envase,
                     conversion_multiplier,
                 }
 
@@ -161,6 +170,11 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
             }
 
             // --- Step C: Update Purchase Line ---
+            const newReviewStatus =
+                line.resolution.action === 'skip' ? 'skipped'
+                : line.review_status === 'auto_approved' ? 'auto_approved'
+                : 'reviewed'
+
             const { error: lineError } = await supabase
                 .from('erp_purchase_lines')
                 .update({
@@ -168,51 +182,103 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                     quantity: line.quantity,
                     unit_price: line.unit_price,
                     line_total_cost: line.line_total_cost,
+                    review_status: newReviewStatus,
                 })
                 .eq('id', line.purchase_line_id)
 
             if (lineError) throw new Error(`Failed to update line ${line.purchase_line_id}: ${lineError.message}`)
 
             // --- Step D: Price History ---
-            if (finalMasterItemId && finalProviderId && line.unit_price != null) {
+            // Procesar precio si: hay master_item, hay proveedor, hay precio, y la línea no fue saltada
+            if (finalMasterItemId && finalProviderId && line.unit_price != null && line.resolution.action !== 'skip') {
                 const venueId = payload.document.venue_id
                 const effectiveDate = payload.document.document_date
-                const conversion_multiplier = line.unidades_por_pack * line.cantidad_por_unidad
+                const conversion_multiplier = line.envases_por_formato * line.contenido_por_envase
 
-                // Fetch the current active price for this item+provider combo
-                const activePriceQuery = supabase
+                // Buscar el precio más reciente (activo o archivado) para comparar
+                // Esto evita duplicados en líneas auto_approved (la SQL ya archivó el activo anterior)
+                const { data: latestPrice } = await supabase
                     .from('erp_price_history')
-                    .select('id, unit_price')
+                    .select('id, unit_price, is_preferred, status')
                     .eq('master_item_id', finalMasterItemId)
                     .eq('provider_id', finalProviderId)
-                    .eq('status', 'active')
+                    .order('effective_date', { ascending: false })
+                    .limit(1)
+                    .maybeSingle()
 
-                if (venueId) {
-                    activePriceQuery.eq('venue_id', venueId)
-                } else {
-                    activePriceQuery.is('venue_id', null)
+                // Si el precio más reciente es igual al que manda el operario → no hacer nada
+                if (latestPrice && Math.abs(Number(latestPrice.unit_price) - (line.unit_price ?? 0)) < 0.001) {
+                    // Solo actualizar is_preferred si el activo existe y cambió
+                    const { data: activeForPreferred } = await supabase
+                        .from('erp_price_history')
+                        .select('id, is_preferred')
+                        .eq('master_item_id', finalMasterItemId)
+                        .eq('provider_id', finalProviderId)
+                        .eq('status', priceHistoryStatus)
+                        .maybeSingle()
+
+                    if (activeForPreferred && activeForPreferred.is_preferred !== line.is_preferred) {
+                        await supabase
+                            .from('erp_price_history')
+                            .update({ is_preferred: line.is_preferred })
+                            .eq('id', activeForPreferred.id)
+
+                        if (line.is_preferred) {
+                            await supabase
+                                .from('erp_price_history')
+                                .update({ is_preferred: false })
+                                .eq('master_item_id', finalMasterItemId)
+                                .eq('status', priceHistoryStatus)
+                                .neq('id', activeForPreferred.id)
+                        }
+                    }
+                    continue
                 }
 
-                const { data: activePrice } = await activePriceQuery.maybeSingle()
+                // Precio cambió (o no hay precio previo): archivar el activo actual e insertar el nuevo
 
-                // If price is identical to the current active entry, skip — no history change needed
-                if (activePrice && activePrice.unit_price === line.unit_price) continue
+                // Buscar el precio activo actual de este proveedor para archivar y heredar is_preferred
+                const { data: currentActive } = await supabase
+                    .from('erp_price_history')
+                    .select('id, is_preferred')
+                    .eq('master_item_id', finalMasterItemId)
+                    .eq('provider_id', finalProviderId)
+                    .eq('status', priceHistoryStatus)
+                    .maybeSingle()
 
-                // Price changed (or no active entry exists): archive current and insert new
-                const archiveQuery = supabase
+                // Verificar si hay algún precio activo para este master_item (para saber si es el primero)
+                const { count: anyActivePriceCount } = await supabase
+                    .from('erp_price_history')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('master_item_id', finalMasterItemId)
+                    .eq('status', priceHistoryStatus)
+
+                const isAbsolutelyFirstPrice = (anyActivePriceCount ?? 0) === 0
+
+                // is_preferred a heredar: del activo actual si existe, del latestPrice si no
+                const inheritedPreferred = currentActive?.is_preferred ?? latestPrice?.is_preferred ?? false
+                const finalIsPreferred = line.is_preferred ?? inheritedPreferred
+
+                // Archivar precio activo anterior de ESTE proveedor
+                await supabase
                     .from('erp_price_history')
                     .update({ status: 'archived' })
                     .eq('master_item_id', finalMasterItemId)
-                    .eq('status', 'active')
+                    .eq('provider_id', finalProviderId)
+                    .eq('status', priceHistoryStatus)
 
-                if (venueId) {
-                    archiveQuery.eq('venue_id', venueId)
-                } else {
-                    archiveQuery.is('venue_id', null)
+                // Si el nuevo precio es preferido, quitar is_preferred de otros proveedores
+                const newIsPreferred = finalIsPreferred
+                if (newIsPreferred || isAbsolutelyFirstPrice) {
+                    await supabase
+                        .from('erp_price_history')
+                        .update({ is_preferred: false })
+                        .eq('master_item_id', finalMasterItemId)
+                        .eq('status', priceHistoryStatus)
+                        .neq('provider_id', finalProviderId)
                 }
 
-                await archiveQuery
-
+                // Insertar nuevo precio
                 await supabase
                     .from('erp_price_history')
                     .insert({
@@ -220,11 +286,104 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                         provider_id: finalProviderId,
                         venue_id: venueId,
                         unit_price: line.unit_price,
-                        cost_per_packaged_unit: line.unit_price / (line.unidades_por_pack || 1),
+                        cost_per_packaged_unit: line.unit_price / (line.envases_por_formato || 1),
                         cost_per_base_unit: line.unit_price / (conversion_multiplier || 1),
                         effective_date: effectiveDate,
-                        status: 'active',
+                        status: priceHistoryStatus,
+                        is_preferred: newIsPreferred || isAbsolutelyFirstPrice,
                     })
+            }
+
+            // --- Step E: Registro de correcciones para análisis y entrenamiento futuro ---
+            // Solo para líneas que el operario revisó manualmente (no auto_approved, no skip)
+            if (line.review_status === 'pending_review' && line.resolution.action !== 'skip' && finalMasterItemId) {
+                const aiData = line.ai_interpretation
+                const extractionStep = aiData?.extraction_step as Record<string, unknown> | null
+                const normStep = aiData?.normalization_step as Record<string, unknown> | null
+
+                const getAiPrice = () => {
+                    const ep = extractionStep?.precio_total as { value?: number; confidence?: number } | null
+                    return ep ?? { value: aiData?.precio_total as number | null, confidence: null }
+                }
+                const getAiQty = () => {
+                    const eq = extractionStep?.cantidad_comprada as { value?: number; confidence?: number } | null
+                    return eq ?? { value: aiData?.cantidad_comprada as number | null, confidence: null }
+                }
+
+                const corrections: Array<{
+                    field_name: string
+                    extracted_value: string | null
+                    corrected_value: string | null
+                    confidence: number | null
+                    correction_type: string
+                }> = []
+
+                const aiPrice = getAiPrice()
+                if (aiPrice?.value != null && Math.abs(Number(aiPrice.value) - (line.unit_price ?? 0)) > 0.001) {
+                    corrections.push({
+                        field_name: 'precio_total',
+                        extracted_value: String(aiPrice.value),
+                        corrected_value: String(line.unit_price),
+                        confidence: (aiPrice.confidence as number) ?? null,
+                        correction_type: 'price',
+                    })
+                }
+
+                const aiQty = getAiQty()
+                if (aiQty?.value != null && Number(aiQty.value) !== line.quantity) {
+                    corrections.push({
+                        field_name: 'cantidad_comprada',
+                        extracted_value: String(aiQty.value),
+                        corrected_value: String(line.quantity),
+                        confidence: (aiQty.confidence as number) ?? null,
+                        correction_type: 'quantity',
+                    })
+                }
+
+                if (line.resolution.action === 'create_and_link') {
+                    const aiOfficialName = (normStep?.official_name as string | null)
+                        ?? (aiData?.producto_normalizado as string | null)
+                    if (aiOfficialName && aiOfficialName !== line.resolution.new_official_name) {
+                        corrections.push({
+                            field_name: 'official_name',
+                            extracted_value: aiOfficialName,
+                            corrected_value: line.resolution.new_official_name,
+                            confidence: null,
+                            correction_type: 'normalization',
+                        })
+                    }
+                    corrections.push({
+                        field_name: 'product_confirmation',
+                        extracted_value: null,
+                        corrected_value: line.resolution.new_official_name,
+                        confidence: null,
+                        correction_type: 'new_product',
+                    })
+                }
+
+                if (corrections.length > 0) {
+                    const { data: providerData } = finalProviderId ? await supabase
+                        .from('erp_providers')
+                        .select('name')
+                        .eq('id', finalProviderId)
+                        .single() : { data: null }
+
+                    for (const correction of corrections) {
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        await (supabase as any).from('extraction_corrections').insert({
+                            purchase_line_id: line.purchase_line_id,
+                            field_name: correction.field_name,
+                            extracted_value: correction.extracted_value,
+                            corrected_value: correction.corrected_value,
+                            confidence: correction.confidence,
+                            correction_type: correction.correction_type,
+                            document_type: payload.document.doc_type,
+                            provider_name: providerData?.name ?? null,
+                            model_version: (aiData?.model_version as string) ?? null,
+                            prompt_version: (aiData?.prompt_version as string) ?? null,
+                        })
+                    }
+                }
             }
         }
 
@@ -282,7 +441,7 @@ export async function deleteDocument(documentId: string): Promise<{ success: boo
             .single()
 
         if (fetchError || !doc) throw new Error('Documento no encontrado')
-        if (doc.status !== 'pending') throw new Error('Solo se pueden eliminar documentos en estado pendiente')
+        if (doc.status !== 'pending' && doc.status !== 'pending_review') throw new Error('Solo se pueden eliminar documentos en estado pendiente')
 
         // 2. Delete purchase lines first (foreign key constraint)
         const { error: linesError } = await supabase

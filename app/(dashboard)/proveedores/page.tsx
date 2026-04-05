@@ -42,6 +42,9 @@ export default async function ProveedoresPage() {
         )
     }
 
+    if (aliasesResult.error) console.error('[proveedores] erp_item_aliases query error:', aliasesResult.error)
+    if (docsResult.error) console.error('[proveedores] erp_documents query error:', docsResult.error)
+
     // Count products per provider
     const productCountMap: Record<string, number> = {}
     for (const alias of aliasesResult.data ?? []) {

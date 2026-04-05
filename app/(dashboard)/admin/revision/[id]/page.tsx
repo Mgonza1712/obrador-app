@@ -65,7 +65,7 @@ export default async function RevisionDetailPage({ params, searchParams }: Props
     // ── 3. Fetch purchase lines (flat) ──
     const { data: linesRaw, error: linesError } = await supabase
         .from('erp_purchase_lines')
-        .select('id, quantity, unit_price, line_total_cost, master_item_id, raw_name, ai_interpretation')
+        .select('id, quantity, unit_price, line_total_cost, master_item_id, raw_name, ai_interpretation, review_status')
         .eq('document_id', id)
 
     if (linesError) {
@@ -132,6 +132,7 @@ export default async function RevisionDetailPage({ params, searchParams }: Props
         master_item_id: l.master_item_id,
         raw_name: l.raw_name,
         ai_interpretation: l.ai_interpretation ?? null,
+        review_status: l.review_status ?? null,
         erp_master_items: l.master_item_id ? (linkedItemMap.get(l.master_item_id) ?? null) : null,
     }))
 

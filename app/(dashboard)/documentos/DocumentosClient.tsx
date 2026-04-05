@@ -348,6 +348,7 @@ export default function DocumentosClient({
                                 className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                             >
                                 <option value="">Todos</option>
+                                <option value="pending_review">En revisión</option>
                                 <option value="pending">Pendiente</option>
                                 <option value="approved">Aprobado</option>
                             </select>
@@ -636,9 +637,9 @@ export default function DocumentosClient({
                                             <div className="flex flex-col gap-1">
                                                 <Badge
                                                     variant="outline"
-                                                    className={`w-fit text-xs ${doc.status === 'approved' ? 'border-green-200 bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'border-amber-200 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300'}`}
+                                                    className={`w-fit text-xs ${doc.status === 'approved' ? 'border-green-200 bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : doc.status === 'pending_review' ? 'border-blue-200 bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300' : 'border-amber-200 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300'}`}
                                                 >
-                                                    {doc.status === 'approved' ? 'Aprobado' : 'Pendiente'}
+                                                    {doc.status === 'approved' ? 'Aprobado' : doc.status === 'pending_review' ? 'En revisión' : 'Pendiente'}
                                                 </Badge>
                                                 <ReconciliationBadge
                                                     status={doc.reconciliation_status}

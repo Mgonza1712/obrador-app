@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache'
 
 export async function updateProviderToggle(
     id: string,
-    field: 'shared_pricing' | 'is_trusted' | 'is_active',
+    field: 'shared_pricing' | 'is_active',
     value: boolean,
 ) {
     const supabase = await createClient()
@@ -26,7 +26,6 @@ export async function updateProvider(
         channel: string | null
         notes: string | null
         shared_pricing: boolean
-        is_trusted: boolean
         is_active: boolean
     },
 ) {

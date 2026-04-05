@@ -57,7 +57,7 @@ export default function ProveedoresClient({ providers: initial }: { providers: P
 
     function handleToggle(
         id: string,
-        field: 'shared_pricing' | 'is_trusted' | 'is_active',
+        field: 'shared_pricing' | 'is_active',
         value: boolean,
     ) {
         setProviders((prev) => prev.map((p) => (p.id === id ? { ...p, [field]: value } : p)))
@@ -205,9 +205,6 @@ export default function ProveedoresClient({ providers: initial }: { providers: P
                                     Precio compartido
                                 </th>
                                 <th className="px-4 py-3 text-center font-medium text-muted-foreground">
-                                    Confiable
-                                </th>
-                                <th className="px-4 py-3 text-center font-medium text-muted-foreground">
                                     Activo
                                 </th>
                                 <th className="px-4 py-3" />
@@ -254,12 +251,6 @@ export default function ProveedoresClient({ providers: initial }: { providers: P
                                         <Toggle
                                             checked={p.shared_pricing ?? false}
                                             onChange={(v) => handleToggle(p.id, 'shared_pricing', v)}
-                                        />
-                                    </td>
-                                    <td className="px-4 py-3 text-center">
-                                        <Toggle
-                                            checked={p.is_trusted ?? false}
-                                            onChange={(v) => handleToggle(p.id, 'is_trusted', v)}
                                         />
                                     </td>
                                     <td className="px-4 py-3 text-center">

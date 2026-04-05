@@ -126,11 +126,11 @@ export async function approveDocumentStatus(documentId: string): Promise<ActionR
     if (!documentId) return { success: false, error: 'ID de documento inválido' }
     const supabase = await createClient()
 
-    const { error } = await supabase
+    const { error } = await (supabase as any)
         .from('erp_documents')
         .update({ status: 'approved' })
         .eq('id', documentId)
-        .eq('status', 'pending')
+        .in('status', ['pending', 'pending_review'])
 
     if (error) return { success: false, error: error.message }
 

@@ -1,147 +1,193 @@
-# CLAUDE.md
+# CLAUDE.md — obrador-app (Pizca Web App)
 
-This file provides strict guidance to Claude Code (claude.ai/code) when working with the "Obrador App" repository.
+Este archivo da contexto completo a Claude Code para trabajar en el repo `obrador-app`.
+Última actualización: 2026-04-04.
 
-## 1. Project Overview
-**Pizca** (formerly Obrador App) — SaaS ERP gastronómico multi-tenant para gestión financiera, compras automatizadas por IA y coste de escandallos en tiempo real. Desarrollado por WeScaleOps. Cliente actual: Grupo 78 Sabores (3 locales: Biergarten by 78, Cafeseamos, 78 Sabores y Copas).
+## 1. Visión General del Proyecto
+
+**Pizca** — SaaS ERP gastronómico multi-tenant para gestión financiera, compras automatizadas por IA y coste de escandallos en tiempo real. Desarrollado por WeScaleOps. Cliente actual: Grupo 78 Sabores (3 locales: Biergarten by 78, Cafeseamos, 78 Sabores y Copas).
+
+### Arquitectura Global (todos los componentes)
+
+```
+Canales de entrada (Telegram/WhatsApp/Web/Email)
+        │
+        ▼
+    N8N (orquestador — solo triggers e integraciones, NO lógica de negocio)
+        │
+        ▼
+    pizca-extractor (FastAPI, puerto 8001, servidor Oracle)
+    → GPT-4o extrae datos + normaliza productos nuevos
+        │
+        ▼
+    Supabase (PostgreSQL + Auth + Storage)
+    → Función procesar_factura_completa_v4 decide auto-aprobación
+        │
+        ▼
+    Pizca Web App (este repo — Next.js en Vercel)
+    → Panel de revisión + documentos + catálogo + escandallos
+```
+
+### Repos del proyecto
+- `Mgonza1712/obrador-app` — Este repo. Web app Next.js → deploy Vercel
+- `Mgonza1712/pizca-server` — Extractor FastAPI → deploy Oracle vía GitHub Actions
 
 ### Commands
 ```bash
-npm run dev       # Start dev server (uses Turbopack)
+npm run dev       # Dev server (Turbopack)
 npm run build     # Production build
-npm run start     # Start production server
-npm run lint      # Run ESLint
+npm run lint      # ESLint
+npx supabase gen types typescript --project-id anszcyixjopxnskpxewg --schema public > database.types.ts
 ```
 
-## 2. Tech Stack & Architecture
+## 2. Tech Stack
 
-### Web App (este repo)
-- **Framework:** Next.js (App Router, React Server Components) + TypeScript
-- **Backend/DB:** Supabase (PostgreSQL, Auth, Storage) — proyecto: `anszcyixjopxnskpxewg`, región: `eu-west-1`
+- **Framework:** Next.js (App Router, RSC) + TypeScript
+- **Backend/DB:** Supabase — proyecto: `anszcyixjopxnskpxewg`, región: `eu-west-1`
   - Browser client: `lib/supabase/client.ts`
-  - Server client: `lib/supabase/server.ts` — exporta `createClient` (no `createServerClient`)
-- **Styling:** Tailwind CSS v4 (OKLCH color system, dark mode)
-- **UI Components:** shadcn/ui (new-york style) + Lucide Icons
-- **Deploy:** Vercel (automático desde rama `main` del repo `Mgonza1712/obrador-app`)
+  - Server client: `lib/supabase/server.ts` — exporta `createClient` (NO `createServerClient`)
+- **Styling:** Tailwind CSS v4 (OKLCH, dark mode)
+- **UI:** shadcn/ui (new-york) + Lucide Icons
+- **Deploy:** Vercel automático desde `main`
 
-### Servidor Oracle (infraestructura separada)
-- **Automatización:** n8n (orquestador de triggers e integraciones)
-- **Extractor de documentos:** microservicio FastAPI en `~/pizca-server/pizca-extractor/` — puerto 8001
-- **Mensajería:** Evolution API (WhatsApp)
-- **Reverse proxy:** Caddy
-- **Repo del servidor:** `github.com/Mgonza1712/pizca-server` (privado)
-- Deploy automático vía GitHub Actions al hacer push a `main`
+## 3. Naming Consistency — Variables unificadas entre plataformas
 
-## 3. Route Structure
+**CRÍTICO:** Estos nombres se usan en TODO el pipeline (prompt LLM, extractor Python, adapter N8N, función SQL, app). Al implementar cambios, respetar siempre esta tabla:
 
-### Core ERP (Dashboard)
-```
-app/(dashboard)/                    — Layout principal del dashboard
-app/(dashboard)/escandallos/        — Motor financiero de costes. CRUD de platos y sub-recetas
-app/(dashboard)/documentos/         — Historial y conciliación de facturas/albaranes
-app/(dashboard)/catalogo/           — Catálogo activo con proveedor preferido por producto
-app/(dashboard)/proveedores/        — Gestión de proveedores, métricas y fusión de duplicados
-app/(dashboard)/alertas-rentabilidad/ — Panel de notificaciones financieras
-app/admin/revision/                 — UI de control humano para facturas que la IA no aprobó
-```
+| Variable | Significado | Dónde |
+|---|---|---|
+| `raw_name` | Nombre textual exacto del documento | Todo el pipeline |
+| `official_name` | Nombre normalizado del producto maestro | LLM, erp_master_items |
+| `cantidad_comprada` | Cuántos bultos/unidades de compra | Todo el pipeline |
+| `precio_unitario` | Precio de UN bulto (sin IVA) | LLM, SQL (unit_price), app |
+| `precio_linea` | Total línea = cantidad × precio_unitario (sin IVA) | Adapter calcula, SQL (line_total_cost) |
+| `iva_percent` | Porcentaje de IVA (4, 10, 21) | LLM, SQL, app |
+| `formato_compra` | Tipo de bulto (Caja, Barril, etc.) | erp_item_aliases, app |
+| `envases_por_formato` | Unidades físicas por bulto | erp_item_aliases, app |
+| `contenido_por_envase` | Cantidad de ml/g/ud por envase | erp_item_aliases, app |
+| `base_unit` | Unidad base (ml, g, ud) | erp_master_items |
+| `confidence_precio` | Score 0-1 del LLM | Extractor, SQL, app |
 
-### V1 / Legacy (a migrar)
-```
-app/recetario/   — (Legacy) Calculadora de escalado. Migrar a usar assemblies
-app/fichas/      — (Legacy) SOPs visuales. Migrar a usar assemblies
-```
+**Nombres que ve el operario en la UI:**
+- "Formato de compra" → `formato_compra`
+- "Envases por formato" → `envases_por_formato`
+- "Contenido por envase" → `contenido_por_envase`
 
-### Auth
-```
-app/login/ + app/auth/callback/  — Supabase auth flow. Middlewares protegen rutas y validan JWTs
-```
-
-## 4. Database Schema & Multi-Tenancy
+## 4. Database Schema
 
 ### Multi-tenancy & RLS
-**CRÍTICO:** RLS está HABILITADO en todas las tablas de negocio.
-- Todos los datos están filtrados por `tenant_id` (vinculado a `erp_tenants`)
-- Los perfiles (`profiles`) vinculan `auth.users` a un `tenant_id` y `venue_id`
-- El cliente autenticado de Supabase pasa el JWT automáticamente — PostgreSQL filtra invisiblemente
-- Las Server Actions DEBEN ejecutarse con el cliente servidor autenticado (`createClient` de `lib/supabase/server.ts`)
+RLS habilitado en todas las tablas de negocio. Datos filtrados por `tenant_id`. Server Actions usan `createClient` de `lib/supabase/server.ts`.
 
 ### Dominio: Compras & Catálogo
 ```
-erp_documents        — Cabeceras de facturas/albaranes/presupuestos
-erp_purchase_lines   — Líneas de cada documento
-erp_master_items     — Catálogo único de materias primas
-                       base_unit válidos: 'ml', 'g', 'ud'
-                       category válidos: 'Bebidas Alcohólicas', 'Bebidas Sin Alcohol',
-                       'Alimentos Secos', 'Alimentos Frescos', 'Lácteos',
-                       'Limpieza', 'Descartables', 'Otros'
-erp_item_aliases     — Diccionario de nombres/formatos por proveedor para cada master_item
-                       Campos: raw_name, provider_id, master_item_id, unidad_precio,
-                       unidades_por_pack, cantidad_por_unidad, conversion_multiplier, formato
-erp_price_history    — Historial inmutable de precios
-                       status válidos: 'active', 'archived', 'quote', 'inactive'
-                       'quote' = cotización recibida, sin compra real (para comparativas)
-erp_providers        — channel válidos: 'email', 'whatsapp', 'telegram', 'telefono'
-                       is_trusted: activa auto-aprobación si todos los items tienen alias
-extraction_logs      — Registro de cada documento procesado por el extractor FastAPI
-extraction_corrections — Correcciones humanas sobre lo que infirió el LLM (dataset futuro)
+erp_documents        — Cabeceras. total_amount = total CON IVA del documento
+erp_purchase_lines   — Líneas. unit_price = precio unitario SIN IVA, iva_percent por línea
+erp_master_items     — Catálogo. base_unit: 'ml'|'g'|'ud'
+                       Categorías: 'Cervezas', 'Vinos y Licores', 'Refrescos y Agua',
+                       'Café e Infusiones', 'Carnes', 'Pescados y Mariscos',
+                       'Frutas y Verduras', 'Lácteos y Huevos', 'Panadería y Bollería',
+                       'Congelados', 'Conservas y Salsas', 'Aceites y Condimentos',
+                       'Harinas y Cereales', 'Limpieza e Higiene', 'Descartables',
+                       'Equipamiento', 'Servicios'
+erp_item_aliases     — Diccionario nombre/formato por proveedor
+                       Campos: raw_name, provider_id, master_item_id,
+                       formato_compra, envases_por_formato, contenido_por_envase
+erp_price_history    — Historial precios. unit_price = SIN IVA, iva_percent guardado
+                       status: 'active'|'archived'|'quote'|'inactive'
+erp_providers        — channel: 'email'|'whatsapp'|'telegram'|'telefono'
+extraction_logs      — Metadata de cada extracción
+extraction_corrections — Correcciones humanas (dataset para mejora iterativa)
 ```
 
-### Dominio: Escandallos (Motor Financiero)
+### Dominio: Escandallos
 ```
-assemblies           — Platos, sub-recetas o preparaciones finales
-bom_lines            — Ingredientes. FK mutuamente excluyentes:
-                       component_id (materia prima) XOR sub_assembly_id (sub-receta)
-                       Usa waste_pct para merma individual, display_quantity/display_unit para UI
-components           — Puente entre un master_item y el tenant
-unit_conversions     — Tabla de conversiones para normalizar unidades
-cost_alerts          — Alertas de inflación y margen
+assemblies           — Platos y sub-recetas. Costes = SIN IVA
+bom_lines            — Ingredientes. component_id XOR sub_assembly_id
+components           — Puente master_item → tenant
+unit_conversions     — Conversiones de unidades
+cost_alerts          — Alertas de inflación/margen
 ```
+
+### Formatos de compra válidos
+Caja, Barril, Bidón, Bolsa, Unidad, Kilogramo, Retráctil
 
 ### Lógica de venue por tipo de documento
-- **Presupuesto/Cotización** → siempre Sede Central (venue genérico)
-- **Albarán** → detectar `local_receptor` (shared_pricing NO aplica)
-- **Factura** → si `shared_pricing=true` → Sede Central; si `false` → detectar `local_receptor`
+- Presupuesto → siempre Sede Central
+- Albarán → detectar local_receptor (shared_pricing NO aplica)
+- Factura → si shared_pricing=true → Sede Central; si false → detectar local
 
-## 5. Backend Business Rules (NO RE-IMPLEMENTAR EN FRONTEND)
+## 5. Precios — Semántica
 
-### Escandallos — Cálculo de Costes en Cascada (COGS)
-**NUNCA calcules matemáticas en el frontend.** PostgreSQL maneja todo via Triggers y Funciones Recursivas:
-- Cuando se aprueba un precio en `erp_price_history`, un trigger recalcula el coste en cascada de todos los `assemblies` afectados
-- PostgreSQL normaliza unidades automáticamente (1 kg → 1000 g)
-- El coste final (`cogs`) y margen (`margin_pct`) se leen de `assemblies` o vistas SQL (`assemblies_with_financials`)
-- **Precio para escandallos:** usar el último precio activo por `effective_date`, NO el del proveedor preferido
+**CRÍTICO: Todo el sistema trabaja con precios SIN IVA internamente.**
 
-### Módulo de Compras — Flujo de ingesta
-La función RPC `procesar_factura_completa` maneja la entrada de documentos:
-- `draft` → va a revisión humana (`app/admin/revision/`)
-- `auto` → se aprueba sola si `is_trusted=true` Y todos los items tienen alias en `erp_item_aliases`
-- Si hay productos nuevos → fuerza `draft` independientemente de `is_trusted`
+- `erp_price_history.unit_price` = precio de 1 bulto SIN IVA
+- `erp_purchase_lines.unit_price` = precio unitario SIN IVA
+- `erp_purchase_lines.line_total_cost` = cantidad × precio_unitario (SIN IVA)
+- `erp_documents.total_amount` = total del documento CON IVA (lo que dice la factura)
+- `erp_purchase_lines.iva_percent` = % de IVA de esa línea (4, 10, 21)
+- Validación de descuadre: total_documento vs SUM(precio_unitario × cantidad × (1 + iva/100))
 
-### Extractor FastAPI (nuevo en Fase 2B)
-El endpoint `POST http://[servidor]:8001/extract` recibe un PDF/imagen en base64 y devuelve JSON con scores de confianza. Pipeline de dos pasos:
-1. GPT-4o extrae fielmente (sin inferir)
-2. Matching contra `erp_item_aliases` → si hay alias, normalización sin LLM; si no, LLM infiere y guarda alias nuevo
+Costes calculados en erp_price_history:
+- `cost_per_base_unit` = unit_price / (envases_por_formato × contenido_por_envase)
+- `cost_per_packaged_unit` = unit_price / envases_por_formato
 
-**IMPORTANTE:** el extractor crea `erp_master_items` y `erp_item_aliases` directamente. El panel de revisión en `app/admin/revision/` debe mostrar items con `needs_review: true` del response del extractor.
+## 6. Flujo de auto-aprobación (función SQL v4)
 
-### Storage (Documentos Seguros)
-El bucket `facturas` en Supabase S3 es PRIVADO.
-Para mostrar un PDF/imagen NUNCA uses la URL pública. Usa la Server Action `getSecureDocumentUrl` (usa `createSignedUrl` válida por 1 hora) antes de renderizar el iframe/img.
+```
+alias_match=true + confidence_precio ≥ 0.90 → auto_approved
+alias_match=true + confidence_precio < 0.90 → pending_review (low_price_confidence)
+alias_match=true + albarán sin precio       → auto_approved
+alias_match=false (producto nuevo)           → pending_review (new_product)
+```
 
-## 6. Frontend Conventions & UX Rules
+Si TODAS las líneas auto_approved → documento status='approved' (no va a revisión).
+Si alguna pending_review → documento status='pending' (va a /admin/revision).
 
-- **Server Actions First:** Mutations deben ir por `app/actions/` usando `"use server"`. Usar Zod para validación antes de tocar Supabase.
-- **UI Feedback (Toasts):** Siempre usar try/catch en server actions y mostrar mensajes con `sonner` o shadcn's `<Toaster />` (verde = éxito, rojo = error).
-- **Loading States (Suspense):** Cada ruta DEBE tener `loading.tsx` con skeleton loaders. Usar `useTransition` o `isPending` en todos los botones de submit (deshabilitarlos mientras se guarda).
-- **Relational Data (Combobox):** Para seleccionar relaciones (Proveedores, Productos, Ingredientes), usar ESTRICTAMENTE shadcn's `<Command>` + `<Popover>` (patrón Combobox). NUNCA usar `<select>` nativo para listas grandes.
-- **Debouncing:** En filtros client-side (Data Tables), hacer debounce del input antes de actualizar URL search params para no spamear la DB.
+## 7. Panel de revisión — Responsabilidades del Server Action
 
-## 7. Cómo mantener este archivo actualizado
+El Server Action `approveDocument` se encarga de:
+- Crear `erp_master_items` nuevos (solo para new_product)
+- Crear `erp_item_aliases` nuevos
+- Insertar/actualizar `erp_price_history` para líneas reviewed
+- Si el operario cambió el precio de una línea auto_approved → actualizar price_history + registrar extraction_correction
+- Marcar documento como 'approved'
 
-Este archivo debe actualizarse al final de cada sesión de trabajo importante. El proceso:
-1. En Claude.ai (claude.ai/chat), al terminar una sesión, pedirle que genere un CLAUDE.md actualizado
-2. Claude Code lo aplica en VS Code con el contenido nuevo
-3. GitHub Desktop hace commit: `docs: update CLAUDE.md — [fecha]`
-4. Push a main → Vercel hace deploy automático
+**IMPORTANTE:** La función SQL v4 ya creó price_history para las líneas auto_approved. El Server Action NO debe duplicar esos inserts — solo actúa sobre líneas que el operario tocó.
 
-**Criterio para actualizar:** cambios en schema de DB, nuevas rutas, nuevas Server Actions, nuevas reglas de negocio, cambios en la arquitectura general.
+## 8. Líneas low_price_confidence — UX
+- Resaltar precio con borde naranja y badge "⚠️ Verificar precio"
+- Mostrar último precio conocido del proveedor como referencia
+- Si variación >5%, mostrar % de cambio
+- Producto maestro read-only, no requiere confirmación
+
+## 9. Productos nuevos — Preview visual
+Pre-seleccionado (no requiere click "Correcto"). Ejemplo:
+"Caja de 24 × 333ml → 16.69€/caja → 0.70€/bot → 2.10€/L"
+[✏️ Editar desglose] — solo si quiere corregir los campos detallados
+
+## 10. Caso skip en revisión
+- review_status → 'skipped', no bloquea aprobación
+- Sin master_item, alias ni price_history
+- Completar después en /documentos/[id] con badge "Pendiente de vincular"
+- Filtro en /documentos para encontrar documentos con líneas skipped
+
+## 11. Frontend Conventions
+- **Server Actions First:** `app/actions/` con `"use server"` + Zod
+- **Loading States:** Cada ruta con `loading.tsx`, `useTransition` en botones
+- **Combobox:** shadcn `<Command>` + `<Popover>` para listas grandes
+- **Debouncing:** En filtros client-side antes de actualizar URL params
+- **`database.types.ts` se vuelve stale** — regenerar con el comando de la sección 2
+
+## 12. Route Structure
+```
+app/(dashboard)/                     — Layout principal
+app/(dashboard)/escandallos/         — Motor financiero de costes
+app/(dashboard)/documentos/          — Historial y conciliación
+app/(dashboard)/catalogo/            — Catálogo con proveedor preferido
+app/(dashboard)/proveedores/         — Gestión de proveedores
+app/(dashboard)/alertas-rentabilidad/ — Alertas financieras
+app/(dashboard)/admin/revision/      — Revisión humana de documentos pendientes
+```
+
+## 13. Actualización de este archivo
+Actualizar al final de cada sesión importante. Claude.ai genera el contenido, Claude Code lo aplica, GitHub Desktop hace commit `docs: update CLAUDE.md — [fecha]`.

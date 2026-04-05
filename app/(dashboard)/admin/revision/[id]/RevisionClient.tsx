@@ -12,7 +12,7 @@ import { useRouter } from 'next/navigation'
 import { approveDocument, deleteDocument } from '@/app/actions/documentRevision'
 import { getSecureDocumentUrl } from '@/app/actions/documents'
 import type { MasterItemRef, DocumentWithRelations, PurchaseLineWithItem, ReferenceLookup } from './types'
-import { BASE_UNITS, PRODUCT_CATEGORIES } from '@/lib/constants'
+import { BASE_UNITS, PRODUCT_CATEGORIES, FORMATOS_COMPRA } from '@/lib/constants'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -43,10 +43,11 @@ interface LineState {
     unit_price: number | null
 
     // Mathematical variables for item packaging/costing
-    unidad_precio: string
-    unidades_por_pack: number
-    cantidad_por_unidad: number
-    formato: string
+    formato_compra: string
+    envases_por_formato: number
+    contenido_por_envase: number
+    is_preferred: boolean
+    overrideAssociation: boolean
 }
 
 // ─── ProviderCombobox ────────────────────────────────────────────────────────
@@ -304,6 +305,19 @@ function CreatableCombobox({ items, value, newItemName, onChange }: ComboboxProp
     )
 }
 
+// ─── FieldTooltip ─────────────────────────────────────────────────────────────
+
+function FieldTooltip({ text }: { text: string }) {
+    return (
+        <span
+            title={text}
+            className="ml-1 inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full bg-muted text-[9px] font-bold text-muted-foreground hover:bg-muted-foreground hover:text-background transition-colors"
+        >
+            ?
+        </span>
+    )
+}
+
 // ─── Main RevisionClient component ───────────────────────────────────────────
 
 export default function RevisionClient({ document: doc, lines, masterItems, providers, venues, priceHistory, fromProvider }: Props) {
@@ -314,6 +328,8 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
     const [showMismatchModal, setShowMismatchModal] = useState(false)
     const [duplicateError, setDuplicateError] = useState<{ existingDocumentId?: string } | null>(null)
     const [showDuplicateToast, setShowDuplicateToast] = useState(false)
+    const [autoApprovedExpanded, setAutoApprovedExpanded] = useState(false)
+    const [allMarkedPreferred, setAllMarkedPreferred] = useState(false)
     const errorRef = useRef<HTMLDivElement>(null)
 
     const [secureUrl, setSecureUrl] = useState<string | null>(null)
@@ -367,6 +383,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
             newProviderName: initialNewProviderName,
             venue_id: doc.erp_venues?.id ?? null,
             total_amount: doc.total_amount ?? 0,
+            activate_prices: false,
         }
     })
 
@@ -375,19 +392,33 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
         const init: Record<string, LineState> = {}
         for (const line of lines) {
             const ai = line.ai_interpretation
-            const hasAiSuggestion = !line.master_item_id && !!ai?.producto_normalizado
+
+            // Soportar ambas estructuras: nueva (normalization_step) y legacy (campos directos)
+            const norm = (ai?.normalization_step as Record<string, unknown> | undefined) ?? ai
+            const officialName = (norm?.official_name ?? ai?.producto_normalizado ?? '') as string
+            const categoria = (norm?.categoria ?? ai?.categoria ?? '') as string
+            const baseUnit = (norm?.base_unit ?? ai?.unidad_base ?? 'ud') as string
+            const formatoCompra = (norm?.formato_compra ?? ai?.formato_compra ?? 'Unidad') as string
+            const envasesPorFormato = Number(norm?.envases_por_formato ?? ai?.envases_por_formato ?? 1)
+            const contenidoPorEnvase = Number(norm?.contenido_por_envase ?? ai?.contenido_por_envase ?? 1)
+
+            const hasAiSuggestion = !line.master_item_id && !!officialName
+
             init[line.id] = {
                 selectedId: line.master_item_id ?? (hasAiSuggestion ? '__new__' : null),
-                newItemName: ai?.producto_normalizado ?? '',
-                newItemCategory: ai?.categoria ?? '',
-                newItemBaseUnit: ai?.unidad_base ?? 'ud',
+                newItemName: officialName,
+                newItemCategory: categoria,
+                newItemBaseUnit: baseUnit,
                 expanded: false, // always collapsed on server — expanded via useEffect after hydration
                 quantity: line.quantity,
                 unit_price: line.unit_price,
-                unidad_precio: ai?.unidad_precio ? ai.unidad_precio.charAt(0).toUpperCase() + ai.unidad_precio.slice(1) : 'Unidad',
-                unidades_por_pack: ai?.unidades_por_pack ?? 1,
-                cantidad_por_unidad: ai?.cantidad_por_unidad ?? 1,
-                formato: '',
+                formato_compra: formatoCompra ? formatoCompra.charAt(0).toUpperCase() + formatoCompra.slice(1) : 'Unidad',
+                envases_por_formato: envasesPorFormato,
+                contenido_por_envase: contenidoPorEnvase,
+                // Producto genuinamente nuevo (sin master_item) → preferido por defecto
+                // Producto conocido → conservador, el operario puede cambiarlo
+                is_preferred: !line.master_item_id,
+                overrideAssociation: false,
             }
         }
         return init
@@ -398,7 +429,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
         setLineStates((prev) => {
             const next = { ...prev }
             for (const line of lines) {
-                if (!line.master_item_id) {
+                if (line.review_status === 'pending_review' || (!line.review_status && !line.master_item_id)) {
                     next[line.id] = { ...next[line.id], expanded: true }
                 }
             }
@@ -474,6 +505,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                 document_date: docState.document_date,
                 total_amount: displayTotalAmount,
                 venue_id: docState.venue_id,
+                activate_prices: docState.activate_prices,
                 provider_resolution: docState.provider_id === '__new__'
                     ? { action: 'create_and_link' as const, new_provider_name: docState.newProviderName }
                     : { action: 'link_existing' as const, provider_id: docState.provider_id! }
@@ -486,10 +518,9 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                     quantity: state.quantity,
                     unit_price: state.unit_price,
                     line_total_cost: lineTotalCost,
-                    unidad_precio: state.unidad_precio,
-                    unidades_por_pack: state.unidades_por_pack,
-                    cantidad_por_unidad: state.cantidad_por_unidad,
-                    formato: state.formato,
+                    formato_compra: state.formato_compra,
+                    envases_por_formato: state.envases_por_formato,
+                    contenido_por_envase: state.contenido_por_envase,
                     resolution: state.selectedId === '__new__'
                         ? {
                             action: 'create_and_link' as const,
@@ -501,6 +532,9 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                             ? { action: 'link_existing' as const, master_item_id: state.selectedId }
                             : { action: 'skip' as const },
                     raw_name: line.raw_name,
+                    review_status: line.review_status ?? null,
+                    ai_interpretation: line.ai_interpretation as Record<string, unknown> | null,
+                    is_preferred: state.is_preferred,
                 }
             }),
         }
@@ -561,6 +595,26 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
         }
     }
 
+    // Header warning computations
+    const pendingReviewCount = lines.filter(l => l.review_status === 'pending_review').length
+    const newProductCount = lines.filter(l =>
+        l.review_status === 'pending_review' &&
+        (l.ai_interpretation?.review_reasons as string[] | null)?.includes('new_product')
+    ).length
+    const lowConfidenceCount = pendingReviewCount - newProductCount
+    const warnings: string[] = []
+    if (isMismatch) warnings.push(`Descuadre contable de $${mismatchAmount.toFixed(2)}`)
+    if (newProductCount > 0) warnings.push(`${newProductCount} producto${newProductCount > 1 ? 's' : ''} nuevo${newProductCount > 1 ? 's' : ''} a confirmar`)
+    if (lowConfidenceCount > 0) warnings.push(`${lowConfidenceCount} precio${lowConfidenceCount > 1 ? 's' : ''} con confianza baja`)
+
+    // Separar líneas en dos grupos
+    const pendingLines = lines.filter(l =>
+        l.review_status === 'pending_review' || (!l.review_status && !l.master_item_id)
+    )
+    const approvedLines = lines.filter(l =>
+        l.review_status === 'auto_approved' || (!l.review_status && !!l.master_item_id)
+    )
+
     return (
         <div className="w-full max-w-[1600px] mx-auto p-4 md:p-6 flex flex-col gap-6">
             {/* ── Top Header ── */}
@@ -599,21 +653,14 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                     </h1>
                 </div>
 
-                <div className="flex items-center gap-1.5">
-                    {unmappedCount > 0 ? (
-                        <>
-                            <AlertTriangle className="h-3.5 w-3.5 shrink-0" style={{ color: '#BA7517' }} />
-                            <span className="text-sm font-medium" style={{ color: '#854F0B' }}>
-                                {unmappedCount} producto{unmappedCount !== 1 ? 's' : ''} nuevo{unmappedCount !== 1 ? 's' : ''} a confirmar
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                    {warnings.length > 0 ? (
+                        warnings.map((w, i) => (
+                            <span key={i} className="flex items-center gap-1.5 text-sm font-medium text-orange-600 dark:text-orange-400">
+                                <AlertTriangle className="h-4 w-4 shrink-0" />
+                                {w}
                             </span>
-                        </>
-                    ) : isMismatch ? (
-                        <>
-                            <AlertTriangle className="h-3.5 w-3.5 shrink-0" style={{ color: '#BA7517' }} />
-                            <span className="text-sm font-medium" style={{ color: '#854F0B' }}>
-                                Listo para revisar — hay un descuadre contable
-                            </span>
-                        </>
+                        ))
                     ) : (
                         <>
                             <CheckCircle2 className="h-3.5 w-3.5 shrink-0" style={{ color: '#3B6D11' }} />
@@ -767,6 +814,29 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                 />
                             </div>
 
+                            {docState.doc_type === 'presupuesto' && (
+                                <div className="col-span-2 flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 dark:border-amber-900 dark:bg-amber-950/40">
+                                    <div>
+                                        <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                                            Activar precios para escandallos
+                                        </p>
+                                        <p className="text-xs text-amber-700 dark:text-amber-400">
+                                            Activá esto solo si los precios de este presupuesto son los que va a
+                                            aplicar tu proveedor habitual. Las cotizaciones de evaluación déjalas desactivadas.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={docState.activate_prices}
+                                        onClick={() => setDocState(prev => ({ ...prev, activate_prices: !prev.activate_prices }))}
+                                        className={`relative ml-4 inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${docState.activate_prices ? 'bg-amber-500' : 'bg-input'}`}
+                                    >
+                                        <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-lg transition-transform ${docState.activate_prices ? 'translate-x-5' : 'translate-x-0'}`} />
+                                    </button>
+                                </div>
+                            )}
+
                             <div className="col-span-2 mt-2 pt-2 border-t border-border flex justify-end">
                                 <div className="text-right w-full sm:w-1/2">
                                     <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total a pagar</dt>
@@ -804,10 +874,21 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                             )}
 
                             <div className="space-y-2">
-                                {lines.map((line) => {
+                                {pendingLines.map((line) => {
                                     const state = lineStates[line.id]
                                     const isNew = state.selectedId === '__new__'
                                     const isMapped = !!line.master_item_id
+
+                                    // Clasificación ternaria basada en review_status + review_reasons del JSONB
+                                    const reviewStatus = line.review_status
+                                    const reviewReasons: string[] = (line.ai_interpretation?.review_reasons as string[]) ?? []
+                                    const isAutoApproved = reviewStatus === 'auto_approved'
+                                    const isPendingPrice = reviewStatus === 'pending_review' && reviewReasons.includes('low_price_confidence')
+                                    const isPendingNew = reviewStatus === 'pending_review' && reviewReasons.includes('new_product')
+                                    // Fallback para líneas sin review_status (documentos anteriores al nuevo sistema)
+                                    const isLegacyMapped = !reviewStatus && isMapped
+                                    const isLegacyUnmapped = !reviewStatus && !isMapped
+                                    const isManuallySkipped = reviewStatus === 'pending_review' && state.selectedId === null
 
                                     // Price variation vs last recorded price for this provider
                                     const lastPrice = isMapped && line.master_item_id ? priceHistory[line.master_item_id] : undefined
@@ -820,9 +901,14 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                         <div
                                             key={line.id}
                                             className="rounded-lg border transition-all duration-200"
-                                            style={isMapped
-                                                ? { borderColor: '#3B6D11', borderWidth: '0.5px', backgroundColor: '#ffffff' }
-                                                : { borderColor: '#BA7517', borderWidth: '1.5px', backgroundColor: '#FAEEDA' }
+                                            style={
+                                                isManuallySkipped
+                                                    ? { borderColor: '#94a3b8', borderWidth: '0.5px', backgroundColor: '#f8fafc' }
+                                                    : isAutoApproved || isLegacyMapped
+                                                    ? { borderColor: '#3B6D11', borderWidth: '0.5px', backgroundColor: '#ffffff' }
+                                                    : isPendingPrice
+                                                    ? { borderColor: '#BA7517', borderWidth: '1.5px', backgroundColor: '#FEF3C7' }
+                                                    : { borderColor: '#BA7517', borderWidth: '1.5px', backgroundColor: '#FAEEDA' }
                                             }
                                         >
                                             {/* Line header */}
@@ -832,11 +918,13 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                 className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-black/5"
                                             >
                                                 <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                                                    {isMapped
+                                                    {isManuallySkipped
+                                                        ? null
+                                                        : isAutoApproved || isLegacyMapped
                                                         ? <CheckCircle2 className="h-4 w-4 shrink-0" style={{ color: '#3B6D11' }} />
                                                         : <AlertTriangle className="h-4 w-4 shrink-0" style={{ color: '#BA7517' }} />
                                                     }
-                                                    <span className="min-w-0 truncate text-sm font-medium" title={line.raw_name || 'Producto sin identificar'} style={!isMapped ? { color: '#412402' } : undefined}>
+                                                    <span className="min-w-0 truncate text-sm font-medium" title={line.raw_name || 'Producto sin identificar'} style={isManuallySkipped ? { color: '#94a3b8' } : (!isMapped ? { color: '#412402' } : undefined)}>
                                                         {line.raw_name || <span className="italic text-muted-foreground">Producto sin identificar</span>}
                                                     </span>
                                                 </div>
@@ -900,108 +988,446 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                         <label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wide">
                                                             Producto maestro
                                                         </label>
-                                                        <CreatableCombobox
-                                                            items={masterItems}
-                                                            value={state.selectedId}
-                                                            newItemName={state.newItemName}
-                                                            onChange={(id, newName) => updateLine(line.id, { selectedId: id, newItemName: newName })}
-                                                        />
-                                                        {state.selectedId === '__new__' && (
-                                                            <div className="mt-3 p-3 bg-blue-50/50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900 rounded-md">
-                                                                <p className="mb-2 text-xs font-medium text-blue-700 dark:text-blue-400">
-                                                                    Se creará en el catálogo maestro. Verifica o corrige:
-                                                                </p>
-                                                                <div className="space-y-3">
-                                                                    <div>
-                                                                        <label className="text-[10px] font-semibold text-blue-600/70 dark:text-blue-400/70 uppercase">Nombre</label>
-                                                                        <input
-                                                                            type="text"
-                                                                            value={state.newItemName}
-                                                                            onChange={(e) => updateLine(line.id, { newItemName: e.target.value })}
-                                                                            className="mt-1 block w-full h-7 rounded-sm border-blue-200 dark:border-blue-800 bg-white dark:bg-card px-2 text-xs text-blue-900 dark:text-blue-100 placeholder:text-blue-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
-                                                                            placeholder="Ej: Carne picada"
-                                                                        />
-                                                                    </div>
-                                                                    <div className="grid grid-cols-2 gap-3">
-                                                                        <div>
-                                                                            <label className="text-[10px] font-semibold text-blue-600/70 dark:text-blue-400/70 uppercase">Categoría</label>
-                                                                            <select
-                                                                                value={state.newItemCategory}
-                                                                                onChange={(e) => updateLine(line.id, { newItemCategory: e.target.value })}
-                                                                                className="mt-1 block w-full h-7 rounded-sm border-blue-200 dark:border-blue-800 bg-white dark:bg-card px-2 text-xs text-blue-900 dark:text-blue-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
-                                                                            >
-                                                                                <option value="">— Seleccionar —</option>
-                                                                                {PRODUCT_CATEGORIES.map((cat) => (
-                                                                                    <option key={cat} value={cat}>{cat}</option>
-                                                                                ))}
-                                                                            </select>
-                                                                        </div>
-                                                                        <div>
-                                                                            <label className="text-[10px] font-semibold text-blue-600/70 dark:text-blue-400/70 uppercase">Unidad Base</label>
-                                                                            <select
-                                                                                value={state.newItemBaseUnit}
-                                                                                onChange={(e) => updateLine(line.id, { newItemBaseUnit: e.target.value })}
-                                                                                className="mt-1 block w-full h-7 rounded-sm border-blue-200 dark:border-blue-800 bg-white dark:bg-card px-2 text-xs text-blue-900 dark:text-blue-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
-                                                                            >
-                                                                                {BASE_UNITS.map((unit) => (
-                                                                                    <option key={unit} value={unit}>{unit}</option>
-                                                                                ))}
-                                                                            </select>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
+                                                        {isPendingPrice && !state.overrideAssociation ? (
+                                                            <div className="flex items-center justify-between rounded-md border border-green-200 bg-green-50 px-3 py-2 dark:border-green-900 dark:bg-green-950/30">
+                                                                <span className="text-sm text-green-800 dark:text-green-200 font-medium">
+                                                                    {line.erp_master_items?.official_name ?? state.newItemName ?? '—'}
+                                                                </span>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => updateLine(line.id, { overrideAssociation: true })}
+                                                                    className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline ml-3 shrink-0 transition-colors"
+                                                                >
+                                                                    ¿Asociación incorrecta?
+                                                                </button>
                                                             </div>
+                                                        ) : (
+                                                            <>
+                                                                <CreatableCombobox
+                                                                    items={masterItems}
+                                                                    value={state.selectedId}
+                                                                    newItemName={state.newItemName}
+                                                                    onChange={(id, newName) => updateLine(line.id, { selectedId: id, newItemName: newName })}
+                                                                />
+                                                                {state.selectedId === '__new__' && (
+                                                                    <div className="mt-3 p-3 bg-blue-50/50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900 rounded-md">
+                                                                        <p className="mb-2 text-xs font-medium text-blue-700 dark:text-blue-400">
+                                                                            Se creará en el catálogo maestro. Verifica o corrige:
+                                                                        </p>
+                                                                        <div className="space-y-3">
+                                                                            <div>
+                                                                                <label className="text-[10px] font-semibold text-blue-600/70 dark:text-blue-400/70 uppercase">Nombre</label>
+                                                                                <input
+                                                                                    type="text"
+                                                                                    value={state.newItemName}
+                                                                                    onChange={(e) => updateLine(line.id, { newItemName: e.target.value })}
+                                                                                    className="mt-1 block w-full h-7 rounded-sm border-blue-200 dark:border-blue-800 bg-white dark:bg-card px-2 text-xs text-blue-900 dark:text-blue-100 placeholder:text-blue-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+                                                                                    placeholder="Ej: Carne picada"
+                                                                                />
+                                                                            </div>
+                                                                            <div className="grid grid-cols-2 gap-3">
+                                                                                <div>
+                                                                                    <label className="text-[10px] font-semibold text-blue-600/70 dark:text-blue-400/70 uppercase">Categoría</label>
+                                                                                    <select
+                                                                                        value={state.newItemCategory}
+                                                                                        onChange={(e) => updateLine(line.id, { newItemCategory: e.target.value })}
+                                                                                        className="mt-1 block w-full h-7 rounded-sm border-blue-200 dark:border-blue-800 bg-white dark:bg-card px-2 text-xs text-blue-900 dark:text-blue-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+                                                                                    >
+                                                                                        <option value="">— Seleccionar —</option>
+                                                                                        {PRODUCT_CATEGORIES.map((cat) => (
+                                                                                            <option key={cat} value={cat}>{cat}</option>
+                                                                                        ))}
+                                                                                    </select>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label className="text-[10px] font-semibold text-blue-600/70 dark:text-blue-400/70 uppercase">Unidad Base</label>
+                                                                                    <select
+                                                                                        value={state.newItemBaseUnit}
+                                                                                        onChange={(e) => updateLine(line.id, { newItemBaseUnit: e.target.value })}
+                                                                                        className="mt-1 block w-full h-7 rounded-sm border-blue-200 dark:border-blue-800 bg-white dark:bg-card px-2 text-xs text-blue-900 dark:text-blue-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+                                                                                    >
+                                                                                        {BASE_UNITS.map((unit) => (
+                                                                                            <option key={unit} value={unit}>{unit}</option>
+                                                                                        ))}
+                                                                                    </select>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+                                                            </>
                                                         )}
                                                     </div>
 
-                                                    {(!isMapped || isNew) && (
+                                                    {(isPendingNew || isLegacyUnmapped || isNew) && (
                                                         <div className="grid grid-cols-3 gap-3 rounded-md bg-secondary/30 p-3 mt-1">
                                                             <div>
-                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Bulto</label>
+                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Formato de compra <FieldTooltip text="Formato en que se compra. Ej: 'Caja' si comprás cajas cerradas, 'Barril' si comprás un barril, 'Unidad' si comprás pieza a pieza." /></label>
                                                                 <select
-                                                                    value={state.unidad_precio}
-                                                                    onChange={(e) => updateLine(line.id, { unidad_precio: e.target.value })}
+                                                                    value={state.formato_compra}
+                                                                    onChange={(e) => updateLine(line.id, { formato_compra: e.target.value })}
                                                                     className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                                 >
-                                                                    {['Caja', 'Barril', 'Bidón', 'Bolsa', 'Pack', 'Unidad', 'Kilogramo'].map(opt => (
+                                                                    {FORMATOS_COMPRA.map(opt => (
                                                                         <option key={opt} value={opt}>{opt}</option>
                                                                     ))}
                                                                 </select>
                                                             </div>
                                                             <div>
-                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Unds/Bulto</label>
+                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Envases por formato <FieldTooltip text="Cuántas unidades trae ese bulto. Ej: una caja de Heineken trae 24 botellas → 24. Un barril → 1." /></label>
                                                                 <input
                                                                     type="number"
                                                                     step="any"
                                                                     min="0"
-                                                                    value={state.unidades_por_pack}
-                                                                    onChange={(e) => updateLine(line.id, { unidades_por_pack: Number(e.target.value) })}
+                                                                    value={state.envases_por_formato}
+                                                                    onChange={(e) => updateLine(line.id, { envases_por_formato: Number(e.target.value) })}
                                                                     className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                                 />
                                                             </div>
                                                             <div>
-                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Tamaño</label>
+                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Contenido por envase <FieldTooltip text="Volumen o peso de CADA unidad individual. Ej: botella Heineken 1/3 → 333 (ml). Kg de queso → 1000 (g). Pieza indivisible → 1 (ud)." /></label>
                                                                 <input
                                                                     type="number"
                                                                     step="any"
                                                                     min="0"
-                                                                    value={state.cantidad_por_unidad}
-                                                                    onChange={(e) => updateLine(line.id, { cantidad_por_unidad: Number(e.target.value) })}
+                                                                    value={state.contenido_por_envase}
+                                                                    onChange={(e) => updateLine(line.id, { contenido_por_envase: Number(e.target.value) })}
                                                                     className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                                 />
                                                             </div>
                                                         </div>
                                                     )}
+
+                                                <div className="flex items-center justify-between rounded-md border border-border/50 bg-accent/20 px-3 py-2">
+                                                    <div>
+                                                        <p className="text-xs font-medium text-foreground">Proveedor preferido para este producto</p>
+                                                        <p className="text-xs text-muted-foreground">
+                                                            {isMapped && !isPendingNew
+                                                                ? 'Al activar, el proveedor anterior perderá este estado para este producto.'
+                                                                : 'Al ser producto nuevo, queda como proveedor preferido por defecto.'}
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        role="switch"
+                                                        aria-checked={state.is_preferred}
+                                                        onClick={() => updateLine(line.id, { is_preferred: !state.is_preferred })}
+                                                        className={`relative ml-4 inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${state.is_preferred ? 'bg-green-500' : 'bg-input'}`}
+                                                    >
+                                                        <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${state.is_preferred ? 'translate-x-4' : 'translate-x-0'}`} />
+                                                    </button>
                                                 </div>
-                                            )}
-                                        </div>
-                                    )
-                                })}
+
+                                                {(isPendingPrice || isPendingNew || isLegacyUnmapped) && (
+                                                    <div className="flex justify-end pt-1">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => updateLine(line.id, { selectedId: null, is_preferred: false })}
+                                                            className="text-xs text-muted-foreground underline-offset-2 hover:underline hover:text-foreground transition-colors"
+                                                        >
+                                                            Saltar por ahora
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                )
+                            })}
+
+                            {approvedLines.length > 0 && (
+                                    <div className="mt-3">
+                                        <button
+                                            type="button"
+                                            onClick={() => setAutoApprovedExpanded(prev => !prev)}
+                                            className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-accent/50"
+                                        >
+                                            <span className="flex items-center gap-2">
+                                                <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+                                                {approvedLines.length} producto{approvedLines.length !== 1 ? 's' : ''} aprobado{approvedLines.length !== 1 ? 's' : ''} automáticamente
+                                                <span
+                                                    title="Estos productos fueron reconocidos por el sistema con alta confianza y no requieren revisión manual."
+                                                    className="cursor-help text-muted-foreground/60 hover:text-muted-foreground"
+                                                >ⓘ</span>
+                                            </span>
+                                            {autoApprovedExpanded
+                                                ? <ChevronUp className="h-3.5 w-3.5" />
+                                                : <ChevronDown className="h-3.5 w-3.5" />
+                                            }
+                                        </button>
+
+                                        {autoApprovedExpanded && (
+                                            <div className="mt-1 space-y-2">
+                                                {approvedLines.map((line) => {
+                                                    const state = lineStates[line.id]
+                                                    const isNew = state.selectedId === '__new__'
+                                                    const isMapped = !!line.master_item_id
+
+                                                    const reviewStatus = line.review_status
+                                                    const reviewReasons: string[] = (line.ai_interpretation?.review_reasons as string[]) ?? []
+                                                    const isAutoApproved = reviewStatus === 'auto_approved'
+                                                    const isPendingPrice = reviewStatus === 'pending_review' && reviewReasons.includes('low_price_confidence')
+                                                    const isPendingNew = reviewStatus === 'pending_review' && reviewReasons.includes('new_product')
+                                                    const isLegacyMapped = !reviewStatus && isMapped
+                                                    const isLegacyUnmapped = !reviewStatus && !isMapped
+                                                    const isManuallySkipped = reviewStatus === 'pending_review' && state.selectedId === null
+
+                                                    const lastPrice = isMapped && line.master_item_id ? priceHistory[line.master_item_id] : undefined
+                                                    const priceDelta = (isMapped && lastPrice != null && lastPrice > 0 && state.unit_price != null)
+                                                        ? ((state.unit_price - lastPrice) / lastPrice) * 100
+                                                        : null
+                                                    const showPriceAlert = priceDelta !== null && Math.abs(priceDelta) >= 0.5
+
+                                                    return (
+                                                        <div
+                                                            key={line.id}
+                                                            className="rounded-lg border transition-all duration-200"
+                                                            style={
+                                                                isManuallySkipped
+                                                                    ? { borderColor: '#94a3b8', borderWidth: '0.5px', backgroundColor: '#f8fafc' }
+                                                                    : isAutoApproved || isLegacyMapped
+                                                                    ? { borderColor: '#3B6D11', borderWidth: '0.5px', backgroundColor: '#ffffff' }
+                                                                    : isPendingPrice
+                                                                    ? { borderColor: '#BA7517', borderWidth: '1.5px', backgroundColor: '#FEF3C7' }
+                                                                    : { borderColor: '#BA7517', borderWidth: '1.5px', backgroundColor: '#FAEEDA' }
+                                                            }
+                                                        >
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => toggleExpand(line.id)}
+                                                                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-black/5"
+                                                            >
+                                                                <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                                                                    {isManuallySkipped
+                                                                        ? null
+                                                                        : isAutoApproved || isLegacyMapped
+                                                                        ? <CheckCircle2 className="h-4 w-4 shrink-0" style={{ color: '#3B6D11' }} />
+                                                                        : <AlertTriangle className="h-4 w-4 shrink-0" style={{ color: '#BA7517' }} />
+                                                                    }
+                                                                    <span className="min-w-0 truncate text-sm font-medium" title={line.raw_name || 'Producto sin identificar'} style={isManuallySkipped ? { color: '#94a3b8' } : (!isMapped ? { color: '#412402' } : undefined)}>
+                                                                        {line.raw_name || <span className="italic text-muted-foreground">Producto sin identificar</span>}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="flex shrink-0 items-center gap-4">
+                                                                    {showPriceAlert && (
+                                                                        <span className="text-xs font-semibold tabular-nums" style={{ color: priceDelta! > 0 ? '#dc2626' : '#16a34a' }}>
+                                                                            {priceDelta! > 0 ? '▲' : '▼'} {Math.abs(priceDelta!).toFixed(1)}%
+                                                                        </span>
+                                                                    )}
+                                                                    <span className="text-xs text-muted-foreground">×{state.quantity}</span>
+                                                                    {state.unit_price != null && (
+                                                                        <span className="text-xs text-muted-foreground">${state.unit_price.toFixed(2)}/u</span>
+                                                                    )}
+                                                                    <span className="text-sm font-semibold">${((state.quantity || 0) * (state.unit_price || 0)).toFixed(2)}</span>
+                                                                    {state.expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                                                                </div>
+                                                            </button>
+
+                                                            {state.expanded && (
+                                                                <div className="border-t border-current/10 px-4 py-3 space-y-3 bg-white rounded-b-lg">
+                                                                    <div className="grid grid-cols-3 gap-4 text-sm bg-accent/30 rounded-md p-3 border border-border/50">
+                                                                        <div>
+                                                                            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Cantidad</label>
+                                                                            <input
+                                                                                type="number"
+                                                                                step="any"
+                                                                                min="0"
+                                                                                value={state.quantity || ''}
+                                                                                onChange={(e) => updateLine(line.id, { quantity: Number(e.target.value) })}
+                                                                                className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                                            />
+                                                                        </div>
+                                                                        <div>
+                                                                            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Precio/u ($)</label>
+                                                                            <input
+                                                                                type="number"
+                                                                                step="any"
+                                                                                min="0"
+                                                                                value={state.unit_price ?? ''}
+                                                                                onChange={(e) => updateLine(line.id, { unit_price: e.target.value ? Number(e.target.value) : null })}
+                                                                                className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                                            />
+                                                                        </div>
+                                                                        <div className="flex flex-col justify-end">
+                                                                            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Total línea</label>
+                                                                            <p className="flex h-8 items-center font-bold text-primary px-1">
+                                                                                ${((state.quantity || 0) * (state.unit_price || 0)).toFixed(2)}
+                                                                            </p>
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {!line.master_item_id && line.ai_interpretation?.producto_normalizado && (
+                                                                        <p className="flex items-center gap-1.5 text-xs text-violet-600 dark:text-violet-400">
+                                                                            <span>✨</span>
+                                                                            <span>Campos pre-rellenados con sugerencia IA — edita si es necesario.</span>
+                                                                        </p>
+                                                                    )}
+
+                                                                    <div>
+                                                                        <label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                                                                            Producto maestro
+                                                                        </label>
+                                                                        <CreatableCombobox
+                                                                            items={masterItems}
+                                                                            value={state.selectedId}
+                                                                            newItemName={state.newItemName}
+                                                                            onChange={(id, newName) => updateLine(line.id, { selectedId: id, newItemName: newName })}
+                                                                        />
+                                                                        {state.selectedId === '__new__' && (
+                                                                            <div className="mt-3 p-3 bg-blue-50/50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900 rounded-md">
+                                                                                <p className="mb-2 text-xs font-medium text-blue-700 dark:text-blue-400">
+                                                                                    Se creará en el catálogo maestro. Verifica o corrige:
+                                                                                </p>
+                                                                                <div className="space-y-3">
+                                                                                    <div>
+                                                                                        <label className="text-[10px] font-semibold text-blue-600/70 dark:text-blue-400/70 uppercase">Nombre</label>
+                                                                                        <input
+                                                                                            type="text"
+                                                                                            value={state.newItemName}
+                                                                                            onChange={(e) => updateLine(line.id, { newItemName: e.target.value })}
+                                                                                            className="mt-1 block w-full h-7 rounded-sm border-blue-200 dark:border-blue-800 bg-white dark:bg-card px-2 text-xs text-blue-900 dark:text-blue-100 placeholder:text-blue-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+                                                                                            placeholder="Ej: Carne picada"
+                                                                                        />
+                                                                                    </div>
+                                                                                    <div className="grid grid-cols-2 gap-3">
+                                                                                        <div>
+                                                                                            <label className="text-[10px] font-semibold text-blue-600/70 dark:text-blue-400/70 uppercase">Categoría</label>
+                                                                                            <select
+                                                                                                value={state.newItemCategory}
+                                                                                                onChange={(e) => updateLine(line.id, { newItemCategory: e.target.value })}
+                                                                                                className="mt-1 block w-full h-7 rounded-sm border-blue-200 dark:border-blue-800 bg-white dark:bg-card px-2 text-xs text-blue-900 dark:text-blue-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+                                                                                            >
+                                                                                                <option value="">— Seleccionar —</option>
+                                                                                                {PRODUCT_CATEGORIES.map((cat) => (
+                                                                                                    <option key={cat} value={cat}>{cat}</option>
+                                                                                                ))}
+                                                                                            </select>
+                                                                                        </div>
+                                                                                        <div>
+                                                                                            <label className="text-[10px] font-semibold text-blue-600/70 dark:text-blue-400/70 uppercase">Unidad Base</label>
+                                                                                            <select
+                                                                                                value={state.newItemBaseUnit}
+                                                                                                onChange={(e) => updateLine(line.id, { newItemBaseUnit: e.target.value })}
+                                                                                                className="mt-1 block w-full h-7 rounded-sm border-blue-200 dark:border-blue-800 bg-white dark:bg-card px-2 text-xs text-blue-900 dark:text-blue-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+                                                                                            >
+                                                                                                {BASE_UNITS.map((unit) => (
+                                                                                                    <option key={unit} value={unit}>{unit}</option>
+                                                                                                ))}
+                                                                                            </select>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+
+                                                                    {(isPendingNew || isLegacyUnmapped || isNew) && (
+                                                                        <div className="grid grid-cols-3 gap-3 rounded-md bg-secondary/30 p-3 mt-1">
+                                                                            <div>
+                                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Formato de compra <FieldTooltip text="Formato en que se compra. Ej: 'Caja' si comprás cajas cerradas, 'Barril' si comprás un barril, 'Unidad' si comprás pieza a pieza." /></label>
+                                                                                <select
+                                                                                    value={state.formato_compra}
+                                                                                    onChange={(e) => updateLine(line.id, { formato_compra: e.target.value })}
+                                                                                    className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                                                >
+                                                                                    {FORMATOS_COMPRA.map(opt => (
+                                                                                        <option key={opt} value={opt}>{opt}</option>
+                                                                                    ))}
+                                                                                </select>
+                                                                            </div>
+                                                                            <div>
+                                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Envases por formato <FieldTooltip text="Cuántas unidades trae ese bulto. Ej: una caja de Heineken trae 24 botellas → 24. Un barril → 1." /></label>
+                                                                                <input
+                                                                                    type="number"
+                                                                                    step="any"
+                                                                                    min="0"
+                                                                                    value={state.envases_por_formato}
+                                                                                    onChange={(e) => updateLine(line.id, { envases_por_formato: Number(e.target.value) })}
+                                                                                    className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                                                />
+                                                                            </div>
+                                                                            <div>
+                                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Contenido por envase <FieldTooltip text="Volumen o peso de CADA unidad individual. Ej: botella Heineken 1/3 → 333 (ml). Kg de queso → 1000 (g). Pieza indivisible → 1 (ud)." /></label>
+                                                                                <input
+                                                                                    type="number"
+                                                                                    step="any"
+                                                                                    min="0"
+                                                                                    value={state.contenido_por_envase}
+                                                                                    onChange={(e) => updateLine(line.id, { contenido_por_envase: Number(e.target.value) })}
+                                                                                    className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                                                />
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+
+                                                                <div className="flex items-center justify-between rounded-md border border-border/50 bg-accent/20 px-3 py-2">
+                                                                    <div>
+                                                                        <p className="text-xs font-medium text-foreground">Proveedor preferido para este producto</p>
+                                                                        <p className="text-xs text-muted-foreground">
+                                                                            {isMapped && !isPendingNew
+                                                                                ? 'Al activar, el proveedor anterior perderá este estado para este producto.'
+                                                                                : 'Al ser producto nuevo, queda como proveedor preferido por defecto.'}
+                                                                        </p>
+                                                                    </div>
+                                                                    <button
+                                                                        type="button"
+                                                                        role="switch"
+                                                                        aria-checked={state.is_preferred}
+                                                                        onClick={() => updateLine(line.id, { is_preferred: !state.is_preferred })}
+                                                                        className={`relative ml-4 inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${state.is_preferred ? 'bg-green-500' : 'bg-input'}`}
+                                                                    >
+                                                                        <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${state.is_preferred ? 'translate-x-4' : 'translate-x-0'}`} />
+                                                                    </button>
+                                                                </div>
+
+                                                                {(isPendingPrice || isPendingNew || isLegacyUnmapped) && (
+                                                                    <div className="flex justify-end pt-1">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => updateLine(line.id, { selectedId: null, is_preferred: false })}
+                                                                            className="text-xs text-muted-foreground underline-offset-2 hover:underline hover:text-foreground transition-colors"
+                                                                        >
+                                                                            Saltar por ahora
+                                                                        </button>
+                                                                    </div>
+                                                                )}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </div>
 
                         {/* Approve button */}
                         <div className="p-4 border-t bg-white dark:bg-card rounded-b-xl shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const newValue = !allMarkedPreferred
+                                    setAllMarkedPreferred(newValue)
+                                    setLineStates(prev => {
+                                        const next = { ...prev }
+                                        for (const line of lines) {
+                                            next[line.id] = { ...next[line.id], is_preferred: newValue }
+                                        }
+                                        return next
+                                    })
+                                }}
+                                className={`w-full mb-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                                    allMarkedPreferred
+                                        ? 'border-green-400 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-950/40 dark:text-green-300'
+                                        : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/30'
+                                }`}
+                            >
+                                {allMarkedPreferred
+                                    ? '✓ Todos marcados como preferidos — click para desmarcar'
+                                    : 'Marcar todos como proveedor preferido'}
+                            </button>
                             <Button
                                 onClick={handleApprove}
                                 disabled={isSubmitting}

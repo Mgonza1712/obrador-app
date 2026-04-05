@@ -15,12 +15,39 @@ export interface DocumentAiInterpretation {
 
 // Represents data suggested by the LLM, stored as JSONB in erp_purchase_lines.ai_interpretation
 export interface LineAiInterpretation {
+    // Estructura nueva del extractor v2 (normalization_step anidado)
+    extraction_step?: {
+        cantidad_comprada?: { value?: number; confidence?: number } | null
+        precio_total?: { value?: number; confidence?: number } | null
+        unidad_tal_como_aparece?: { value?: string | null; confidence?: number } | null
+    } | null
+    normalization_step?: {
+        official_name?: string | null
+        categoria?: string | null
+        base_unit?: string | null
+        formato_compra?: string | null
+        envases_por_formato?: string | number | null
+        contenido_por_envase?: string | number | null
+        iva_percent?: number | null
+    } | null
+
+    // Campos de control
+    alias_match?: boolean
+    is_new_product?: boolean
+    needs_review?: boolean
+    review_reasons?: string[]
+    model_version?: string | null
+    prompt_version?: string | null
+
+    // Estructura legacy (campos directos — compatibilidad hacia atrás)
     producto_normalizado?: string | null
     categoria?: string | null
     unidad_base?: string | null
-    unidades_por_pack?: number | null
-    cantidad_por_unidad?: number | null
-    unidad_precio?: string | null
+    formato_compra?: string | null
+    envases_por_formato?: number | null
+    contenido_por_envase?: number | null
+    iva_percent?: number | null
+
     [key: string]: unknown
 }
 
@@ -58,5 +85,6 @@ export interface PurchaseLineWithItem {
     master_item_id: string | null
     raw_name: string | null
     ai_interpretation: LineAiInterpretation | null
+    review_status: 'auto_approved' | 'pending_review' | 'reviewed' | 'skipped' | null
     erp_master_items: MasterItemRef | null
 }

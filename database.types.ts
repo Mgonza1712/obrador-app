@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       assemblies: {
         Row: {
+          allergens: string[] | null
           buffer_pct: number
           category: string | null
           cogs: number | null
@@ -33,6 +34,7 @@ export type Database = {
           yield_unit: string | null
         }
         Insert: {
+          allergens?: string[] | null
           buffer_pct?: number
           category?: string | null
           cogs?: number | null
@@ -50,6 +52,7 @@ export type Database = {
           yield_unit?: string | null
         }
         Update: {
+          allergens?: string[] | null
           buffer_pct?: number
           category?: string | null
           cogs?: number | null
@@ -143,6 +146,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "bom_lines_assembly_id_fkey"
+            columns: ["assembly_id"]
+            isOneToOne: false
+            referencedRelation: "vw_menu_bot"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "bom_lines_component_id_fkey"
             columns: ["component_id"]
             isOneToOne: false
@@ -168,6 +178,13 @@ export type Database = {
             columns: ["sub_assembly_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_top_platos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bom_lines_sub_assembly_id_fkey"
+            columns: ["sub_assembly_id"]
+            isOneToOne: false
+            referencedRelation: "vw_menu_bot"
             referencedColumns: ["id"]
           },
         ]
@@ -204,14 +221,14 @@ export type Database = {
           {
             foreignKeyName: "components_master_item_id_fkey"
             columns: ["master_item_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "bom_lines_expanded"
             referencedColumns: ["master_item_id"]
           },
           {
             foreignKeyName: "components_master_item_id_fkey"
             columns: ["master_item_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "erp_master_items"
             referencedColumns: ["id"]
           },
@@ -290,6 +307,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "cost_alerts_assembly_id_fkey"
+            columns: ["assembly_id"]
+            isOneToOne: false
+            referencedRelation: "vw_menu_bot"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "cost_alerts_master_item_id_fkey"
             columns: ["master_item_id"]
             isOneToOne: false
@@ -305,6 +329,47 @@ export type Database = {
           },
           {
             foreignKeyName: "cost_alerts_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "erp_tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      erp_channel_accounts: {
+        Row: {
+          account_id: string
+          account_name: string | null
+          channel: string
+          created_at: string | null
+          id: string
+          is_active: boolean
+          role: string
+          tenant_id: string
+        }
+        Insert: {
+          account_id: string
+          account_name?: string | null
+          channel: string
+          created_at?: string | null
+          id?: string
+          is_active?: boolean
+          role?: string
+          tenant_id: string
+        }
+        Update: {
+          account_id?: string
+          account_name?: string | null
+          channel?: string
+          created_at?: string | null
+          id?: string
+          is_active?: boolean
+          role?: string
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "erp_channel_accounts_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "erp_tenants"
@@ -418,37 +483,31 @@ export type Database = {
       }
       erp_item_aliases: {
         Row: {
-          cantidad_por_unidad: number | null
-          conversion_multiplier: number | null
-          formato: string | null
+          contenido_por_envase: number | null
+          envases_por_formato: number | null
+          formato_compra: string | null
           id: string
           master_item_id: string | null
           provider_id: string | null
           raw_name: string
-          unidad_precio: string | null
-          unidades_por_pack: number | null
         }
         Insert: {
-          cantidad_por_unidad?: number | null
-          conversion_multiplier?: number | null
-          formato?: string | null
+          contenido_por_envase?: number | null
+          envases_por_formato?: number | null
+          formato_compra?: string | null
           id?: string
           master_item_id?: string | null
           provider_id?: string | null
           raw_name: string
-          unidad_precio?: string | null
-          unidades_por_pack?: number | null
         }
         Update: {
-          cantidad_por_unidad?: number | null
-          conversion_multiplier?: number | null
-          formato?: string | null
+          contenido_por_envase?: number | null
+          envases_por_formato?: number | null
+          formato_compra?: string | null
           id?: string
           master_item_id?: string | null
           provider_id?: string | null
           raw_name?: string
-          unidad_precio?: string | null
-          unidades_por_pack?: number | null
         }
         Relationships: [
           {
@@ -516,6 +575,7 @@ export type Database = {
           effective_date: string | null
           id: string
           is_preferred: boolean
+          iva_percent: number | null
           master_item_id: string | null
           provider_id: string | null
           status: string | null
@@ -528,6 +588,7 @@ export type Database = {
           effective_date?: string | null
           id?: string
           is_preferred?: boolean
+          iva_percent?: number | null
           master_item_id?: string | null
           provider_id?: string | null
           status?: string | null
@@ -540,6 +601,7 @@ export type Database = {
           effective_date?: string | null
           id?: string
           is_preferred?: boolean
+          iva_percent?: number | null
           master_item_id?: string | null
           provider_id?: string | null
           status?: string | null
@@ -585,7 +647,6 @@ export type Database = {
           email: string | null
           id: string
           is_active: boolean
-          is_trusted: boolean
           merged_into: string | null
           name: string
           notes: string | null
@@ -600,7 +661,6 @@ export type Database = {
           email?: string | null
           id?: string
           is_active?: boolean
-          is_trusted?: boolean
           merged_into?: string | null
           name: string
           notes?: string | null
@@ -615,7 +675,6 @@ export type Database = {
           email?: string | null
           id?: string
           is_active?: boolean
-          is_trusted?: boolean
           merged_into?: string | null
           name?: string
           notes?: string | null
@@ -645,30 +704,36 @@ export type Database = {
           ai_interpretation: Json | null
           document_id: string | null
           id: string
+          iva_percent: number | null
           line_total_cost: number
           master_item_id: string | null
           quantity: number
           raw_name: string | null
+          review_status: string | null
           unit_price: number | null
         }
         Insert: {
           ai_interpretation?: Json | null
           document_id?: string | null
           id?: string
+          iva_percent?: number | null
           line_total_cost: number
           master_item_id?: string | null
           quantity: number
           raw_name?: string | null
+          review_status?: string | null
           unit_price?: number | null
         }
         Update: {
           ai_interpretation?: Json | null
           document_id?: string | null
           id?: string
+          iva_percent?: number | null
           line_total_cost?: number
           master_item_id?: string | null
           quantity?: number
           raw_name?: string | null
+          review_status?: string | null
           unit_price?: number | null
         }
         Relationships: [
@@ -691,6 +756,41 @@ export type Database = {
             columns: ["master_item_id"]
             isOneToOne: false
             referencedRelation: "erp_master_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      erp_tenant_config: {
+        Row: {
+          created_at: string | null
+          id: string
+          tenant_id: string
+          threshold_cogs_increase_pct: number
+          threshold_price_spike_pct: number
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          tenant_id: string
+          threshold_cogs_increase_pct?: number
+          threshold_price_spike_pct?: number
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          tenant_id?: string
+          threshold_cogs_increase_pct?: number
+          threshold_price_spike_pct?: number
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "erp_tenant_config_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
+            referencedRelation: "erp_tenants"
             referencedColumns: ["id"]
           },
         ]
@@ -744,6 +844,131 @@ export type Database = {
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "erp_tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      extraction_corrections: {
+        Row: {
+          confidence: number | null
+          corrected_at: string | null
+          corrected_by: string | null
+          corrected_value: string | null
+          correction_type: string | null
+          document_id: string | null
+          document_type: string | null
+          extracted_value: string | null
+          field_name: string
+          id: string
+          model_version: string | null
+          prompt_version: string | null
+          provider_name: string | null
+          purchase_line_id: string | null
+          step: string | null
+        }
+        Insert: {
+          confidence?: number | null
+          corrected_at?: string | null
+          corrected_by?: string | null
+          corrected_value?: string | null
+          correction_type?: string | null
+          document_id?: string | null
+          document_type?: string | null
+          extracted_value?: string | null
+          field_name: string
+          id?: string
+          model_version?: string | null
+          prompt_version?: string | null
+          provider_name?: string | null
+          purchase_line_id?: string | null
+          step?: string | null
+        }
+        Update: {
+          confidence?: number | null
+          corrected_at?: string | null
+          corrected_by?: string | null
+          corrected_value?: string | null
+          correction_type?: string | null
+          document_id?: string | null
+          document_type?: string | null
+          extracted_value?: string | null
+          field_name?: string
+          id?: string
+          model_version?: string | null
+          prompt_version?: string | null
+          provider_name?: string | null
+          purchase_line_id?: string | null
+          step?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "extraction_corrections_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "erp_documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "extraction_corrections_purchase_line_id_fkey"
+            columns: ["purchase_line_id"]
+            isOneToOne: false
+            referencedRelation: "erp_purchase_lines"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      extraction_logs: {
+        Row: {
+          created_at: string | null
+          document_id: string | null
+          document_type: string | null
+          error_message: string | null
+          id: string
+          items_auto_approved: number | null
+          items_to_review: number | null
+          items_total: number | null
+          model_version: string | null
+          ocr_used: boolean | null
+          processing_time_ms: number | null
+          prompt_version: string | null
+          status: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          document_id?: string | null
+          document_type?: string | null
+          error_message?: string | null
+          id?: string
+          items_auto_approved?: number | null
+          items_to_review?: number | null
+          items_total?: number | null
+          model_version?: string | null
+          ocr_used?: boolean | null
+          processing_time_ms?: number | null
+          prompt_version?: string | null
+          status?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          document_id?: string | null
+          document_type?: string | null
+          error_message?: string | null
+          id?: string
+          items_auto_approved?: number | null
+          items_to_review?: number | null
+          items_total?: number | null
+          model_version?: string | null
+          ocr_used?: boolean | null
+          processing_time_ms?: number | null
+          prompt_version?: string | null
+          status?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "extraction_logs_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "erp_documents"
             referencedColumns: ["id"]
           },
         ]
@@ -864,6 +1089,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "sales_items_assembly_id_fkey"
+            columns: ["assembly_id"]
+            isOneToOne: false
+            referencedRelation: "vw_menu_bot"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "sales_items_sales_daily_id_fkey"
             columns: ["sales_daily_id"]
             isOneToOne: false
@@ -911,6 +1143,13 @@ export type Database = {
             columns: ["assembly_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_top_platos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sops_assembly_id_fkey"
+            columns: ["assembly_id"]
+            isOneToOne: false
+            referencedRelation: "vw_menu_bot"
             referencedColumns: ["id"]
           },
         ]
@@ -1058,6 +1297,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "bom_lines_assembly_id_fkey"
+            columns: ["assembly_id"]
+            isOneToOne: false
+            referencedRelation: "vw_menu_bot"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "bom_lines_component_id_fkey"
             columns: ["component_id"]
             isOneToOne: false
@@ -1083,6 +1329,13 @@ export type Database = {
             columns: ["sub_assembly_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_top_platos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bom_lines_sub_assembly_id_fkey"
+            columns: ["sub_assembly_id"]
+            isOneToOne: false
+            referencedRelation: "vw_menu_bot"
             referencedColumns: ["id"]
           },
         ]
@@ -1167,6 +1420,51 @@ export type Database = {
           },
         ]
       }
+      vw_menu_bot: {
+        Row: {
+          alergenos: string[] | null
+          apto_celiaco: boolean | null
+          apto_vegano: boolean | null
+          apto_vegetariano: boolean | null
+          categoria: string | null
+          coste: number | null
+          id: string | null
+          is_active: boolean | null
+          margen_pct: number | null
+          notas: string | null
+          plato: string | null
+          pvp: number | null
+        }
+        Insert: {
+          alergenos?: string[] | null
+          apto_celiaco?: never
+          apto_vegano?: never
+          apto_vegetariano?: never
+          categoria?: string | null
+          coste?: number | null
+          id?: string | null
+          is_active?: boolean | null
+          margen_pct?: number | null
+          notas?: string | null
+          plato?: string | null
+          pvp?: number | null
+        }
+        Update: {
+          alergenos?: string[] | null
+          apto_celiaco?: never
+          apto_vegano?: never
+          apto_vegetariano?: never
+          categoria?: string | null
+          coste?: number | null
+          id?: string | null
+          is_active?: boolean | null
+          margen_pct?: number | null
+          notas?: string | null
+          plato?: string | null
+          pvp?: number | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       auth_tenant_id: { Args: never; Returns: string }
@@ -1192,6 +1490,18 @@ export type Database = {
         }
         Returns: Json
       }
+      procesar_factura_completa_v3: {
+        Args: {
+          p_file_url?: string
+          p_json_payload: Json
+          p_tenant_name: string
+        }
+        Returns: Json
+      }
+      procesar_factura_completa_v4: {
+        Args: { p_file_url?: string; p_json_payload: Json; p_tenant_id: string }
+        Returns: Json
+      }
       propagate_cogs_from_item: {
         Args: { p_master_item_id: string }
         Returns: undefined
@@ -1199,6 +1509,10 @@ export type Database = {
       refresh_assembly_financials: {
         Args: { p_assembly_id: string }
         Returns: undefined
+      }
+      resolve_channel_account: {
+        Args: { p_account_id: string; p_channel: string }
+        Returns: Json
       }
     }
     Enums: {
