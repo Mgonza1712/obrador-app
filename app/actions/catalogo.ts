@@ -18,7 +18,7 @@ export async function getItemWithAliases(itemId: string): Promise<ItemEditData |
             .single(),
         supabase
             .from('erp_item_aliases')
-            .select('id, provider_id, raw_name, envases_por_formato, contenido_por_envase, formato_compra, conversion_multiplier, erp_providers(name)')
+            .select('id, provider_id, raw_name, envases_por_formato, contenido_por_envase, formato_compra, erp_providers(name)')
             .eq('master_item_id', itemId)
             .order('id'),
     ])
@@ -35,7 +35,6 @@ export async function getItemWithAliases(itemId: string): Promise<ItemEditData |
         envases_por_formato: a.envases_por_formato ?? 1,
         contenido_por_envase: a.contenido_por_envase ?? 1,
         formato_compra: a.formato_compra ?? '',
-        conversion_multiplier: a.conversion_multiplier ?? (a.envases_por_formato ?? 1) * (a.contenido_por_envase ?? 1),
     }))
 
     return {
@@ -59,7 +58,6 @@ const UpdateItemSchema = z.object({
         envases_por_formato: z.number().nonnegative(),
         contenido_por_envase: z.number().nonnegative(),
         formato_compra: z.string(),
-        conversion_multiplier: z.number().nonnegative(),
     })),
 })
 
@@ -91,7 +89,6 @@ export async function updateItemMetadata(input: UpdateItemInput): Promise<Action
                 envases_por_formato: alias.envases_por_formato,
                 contenido_por_envase: alias.contenido_por_envase,
                 formato_compra: alias.formato_compra || null,
-                conversion_multiplier: alias.conversion_multiplier,
             })
             .eq('id', alias.id)
         if (error) return { success: false, error: `Error al actualizar alias: ${error.message}` }

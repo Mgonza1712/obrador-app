@@ -20,6 +20,8 @@ interface DocumentRevisionPayload {
     }
     lines: Array<{
         purchase_line_id: string
+        /** When true, this line does not exist in the DB yet and must be INSERTed first */
+        is_new_line?: boolean
         quantity: number
         unit_price: number | null
         line_total_cost: number
@@ -120,6 +122,25 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
         // ── 4. Process Lines (sequentially to avoid race conditions) ──
         for (const line of payload.lines) {
 
+            // --- Step 0: Create the purchase line if it was added manually (no DB row yet) ---
+            if (line.is_new_line) {
+                const { data: newLineRow, error: newLineErr } = await supabase
+                    .from('erp_purchase_lines')
+                    .insert({
+                        document_id: payload.document.id,
+                        raw_name: line.raw_name,
+                        quantity: line.quantity,
+                        unit_price: line.unit_price,
+                        line_total_cost: line.line_total_cost,
+                        review_status: 'pending_review',
+                    })
+                    .select('id')
+                    .single()
+                if (newLineErr) throw new Error(`Failed to create manual line: ${newLineErr.message}`)
+                // Override the temp ID with the real DB id for subsequent steps
+                line.purchase_line_id = newLineRow.id
+            }
+
             // --- Step A: Master Item Resolution ---
             let finalMasterItemId: string | null = null
 
@@ -143,8 +164,6 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
 
             // --- Step B: Upsert Alias (learning engine) ---
             if (finalMasterItemId && finalProviderId && line.raw_name) {
-                const conversion_multiplier = line.envases_por_formato * line.contenido_por_envase
-
                 const { data: existingAlias } = await supabase
                     .from('erp_item_aliases')
                     .select('id')
@@ -159,7 +178,6 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                     formato_compra: line.formato_compra,
                     envases_por_formato: line.envases_por_formato,
                     contenido_por_envase: line.contenido_por_envase,
-                    conversion_multiplier,
                 }
 
                 if (existingAlias) {
@@ -193,8 +211,6 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
             if (finalMasterItemId && finalProviderId && line.unit_price != null && line.resolution.action !== 'skip') {
                 const venueId = payload.document.venue_id
                 const effectiveDate = payload.document.document_date
-                const conversion_multiplier = line.envases_por_formato * line.contenido_por_envase
-
                 // Buscar el precio más reciente (activo o archivado) para comparar
                 // Esto evita duplicados en líneas auto_approved (la SQL ya archivó el activo anterior)
                 const { data: latestPrice } = await supabase
@@ -287,7 +303,7 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                         venue_id: venueId,
                         unit_price: line.unit_price,
                         cost_per_packaged_unit: line.unit_price / (line.envases_por_formato || 1),
-                        cost_per_base_unit: line.unit_price / (conversion_multiplier || 1),
+                        cost_per_base_unit: line.unit_price / ((line.envases_por_formato || 1) * (line.contenido_por_envase || 1)),
                         effective_date: effectiveDate,
                         status: priceHistoryStatus,
                         is_preferred: newIsPreferred || isAbsolutelyFirstPrice,
@@ -321,7 +337,7 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                 const aiPrice = getAiPrice()
                 if (aiPrice?.value != null && Math.abs(Number(aiPrice.value) - (line.unit_price ?? 0)) > 0.001) {
                     corrections.push({
-                        field_name: 'precio_total',
+                        field_name: 'precio_unitario',
                         extracted_value: String(aiPrice.value),
                         corrected_value: String(line.unit_price),
                         confidence: (aiPrice.confidence as number) ?? null,

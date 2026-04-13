@@ -1,36 +1,61 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# obrador-app
 
-## Getting Started
+Web app de `Pizca` para operación interna: revisión de documentos, catálogo, documentos históricos, escandallos y alertas financieras.
 
-First, run the development server:
+## Qué es este repo
+
+Este repositorio contiene la app `Next.js` desplegada en `Vercel`. La app actúa como interfaz operativa sobre el pipeline formado por:
+
+- canales de entrada de documentos
+- `n8n` como orquestador
+- extractor `FastAPI` en el repo `pizca-server`
+- `Supabase` como base de datos, auth y storage
+
+## Stack principal
+
+- `Next.js` App Router + `TypeScript`
+- `Supabase`
+- `Tailwind CSS v4`
+- `shadcn/ui`
+- despliegue en `Vercel`
+
+## Comandos útiles
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run build
+npm run lint
+npx supabase gen types typescript --project-id anszcyixjopxnskpxewg --schema public > database.types.ts
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Contexto del proyecto
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Antes de tocar lógica o UI relevante, lee en este orden:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. `CLAUDE.md`
+2. `AGENTS.md`
+3. `docs/README.md`
+4. la documentación de dominio o integración que corresponda
 
-## Learn More
+## Documentación del repo
 
-To learn more about Next.js, take a look at the following resources:
+- `CLAUDE.md`: reglas e invariantes del proyecto
+- `AGENTS.md`: flujo compartido para agentes
+- `docs/architecture.md`: mapa del sistema
+- `docs/domain/`: negocio y semántica
+- `docs/integrations/`: Supabase y pipeline externo
+- `docs/runbooks/`: desarrollo y despliegue
+- `docs/changes/`: especificaciones de cambios
+- `docs/decisions/`: decisiones duraderas
+- `docs/handoffs/`: estado temporal de sesiones
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## OpenCode y Cursor
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+La configuración compartida para OpenCode está en `opencode.json`.
 
-## Deploy on Vercel
+- agente de documentación: `.opencode/agents/docs.md`
+- skill de documentación: `.opencode/skills/documentation-system/SKILL.md`
+- rules de Cursor: `.cursor/rules/`
+- MCPs compartidos de Cursor: `.cursor/mcp.json`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Guía de setup: `docs/setup/opencode-cursor.md`

@@ -7,6 +7,8 @@ import {
     ExternalLink, FileText, Plus, Search, CheckCheck, Loader2, Trash2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { createClient } from '@/lib/supabase/client'
 import { normalizeText } from '@/utils/normalizeText'
 import { useRouter } from 'next/navigation'
 import { approveDocument, deleteDocument } from '@/app/actions/documentRevision'
@@ -48,6 +50,7 @@ interface LineState {
     contenido_por_envase: number
     is_preferred: boolean
     overrideAssociation: boolean
+    isBreakdownOpen: boolean
 }
 
 // ─── ProviderCombobox ────────────────────────────────────────────────────────
@@ -169,14 +172,29 @@ function ProviderCombobox({ items, value, newItemName, onChange }: ProviderCombo
 
 // ─── CreatableCombobox (Items) ────────────────────────────────────────────────
 
+/** Simple similarity: returns true if one string includes the other (case-insensitive) or they share ≥3 consecutive chars */
+function isSimilar(a: string, b: string): boolean {
+    if (!a || !b) return false
+    const al = a.toLowerCase()
+    const bl = b.toLowerCase()
+    if (al.includes(bl) || bl.includes(al)) return true
+    // Check for shared trigrams
+    for (let i = 0; i <= al.length - 3; i++) {
+        if (bl.includes(al.slice(i, i + 3))) return true
+    }
+    return false
+}
+
 interface ComboboxProps {
     items: MasterItemRef[]
     value: string | null
     newItemName: string
     onChange: (id: string | null, newName: string) => void
+    /** AI-suggested official_name — used to surface a "Ya existe" candidate at the top */
+    suggestedName?: string | null
 }
 
-function CreatableCombobox({ items, value, newItemName, onChange }: ComboboxProps) {
+function CreatableCombobox({ items, value, newItemName, onChange, suggestedName }: ComboboxProps) {
     const [open, setOpen] = useState(false)
     const [query, setQuery] = useState('')
     const containerRef = useRef<HTMLDivElement>(null)
@@ -193,9 +211,20 @@ function CreatableCombobox({ items, value, newItemName, onChange }: ComboboxProp
         return () => document.removeEventListener('mousedown', handle)
     }, [])
 
-    const filtered = items.filter((item) =>
+    const baseFiltered = items.filter((item) =>
         item.official_name.toLowerCase().includes(query.toLowerCase())
     )
+
+    // When no query is typed and there's an AI suggestion, sort the similar item first
+    let filtered = baseFiltered
+    let fuzzyMatchId: string | null = null
+    if (!query && suggestedName) {
+        const match = items.find((item) => isSimilar(item.official_name, suggestedName))
+        if (match) {
+            fuzzyMatchId = match.id
+            filtered = [match, ...baseFiltered.filter((i) => i.id !== match.id)]
+        }
+    }
 
     const displayValue =
         value === '__new__'
@@ -268,6 +297,11 @@ function CreatableCombobox({ items, value, newItemName, onChange }: ComboboxProp
                                 >
                                     <div className="flex items-center gap-2">
                                         <span>{item.official_name}</span>
+                                        {item.id === fuzzyMatchId && (
+                                            <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                                                Ya existe
+                                            </span>
+                                        )}
                                         {item.category && (
                                             <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] uppercase font-medium text-secondary-foreground">
                                                 {item.category}
@@ -318,6 +352,66 @@ function FieldTooltip({ text }: { text: string }) {
     )
 }
 
+// ─── buildCostPreview ─────────────────────────────────────────────────────────
+
+function buildCostPreview(
+    unitPrice: number | null,
+    norm: Record<string, unknown> | null | undefined
+): string | null {
+    if (!norm || unitPrice == null) return null
+
+    const formato = (norm.formato_compra as string | null) ?? null
+    const envases = norm.envases_por_formato != null ? Number(norm.envases_por_formato) : null
+    const contenido = norm.contenido_por_envase != null ? Number(norm.contenido_por_envase) : null
+    const baseUnit = (norm.base_unit as string | null) ?? 'ud'
+    const costPerPackaged = norm.cost_per_packaged_unit != null ? Number(norm.cost_per_packaged_unit) : null
+    const costPerBase = norm.cost_per_base_unit != null ? Number(norm.cost_per_base_unit) : null
+
+    if (!formato) return null
+
+    const fmt = (n: number) => n.toFixed(2)
+
+    // No envases — bulto simple
+    if (!envases || envases <= 1) {
+        return `${formato} → ${fmt(unitPrice)}€/${formato.toLowerCase()}`
+    }
+
+    // With envases_por_formato
+    const bultoLabel = formato.toLowerCase()
+
+    if (baseUnit === 'ml') {
+        // "Caja de 24 × 333ml → 16.69€/caja → 0.70€/bot. → 2.10€/L"
+        const parts: string[] = []
+        const envDesc = contenido ? `${formato} de ${envases} × ${contenido}ml` : `${formato} de ${envases}`
+        parts.push(envDesc)
+        parts.push(`${fmt(unitPrice)}€/${bultoLabel}`)
+        if (costPerPackaged != null) parts.push(`${fmt(costPerPackaged)}€/bot.`)
+        if (costPerBase != null) parts.push(`${fmt(costPerBase * 1000)}€/L`)
+        return parts.join(' → ')
+    }
+
+    if (baseUnit === 'g') {
+        // "Bolsa de 5 × 1.000g → 22.25€/bolsa → 4.45€/kg"
+        const parts: string[] = []
+        const contenidoLabel = contenido
+            ? contenido >= 1000 ? `${(contenido / 1000).toFixed(1).replace('.', ',')}kg` : `${contenido}g`
+            : null
+        const envDesc = contenidoLabel ? `${formato} de ${envases} × ${contenidoLabel}` : `${formato} de ${envases}`
+        parts.push(envDesc)
+        parts.push(`${fmt(unitPrice)}€/${bultoLabel}`)
+        if (costPerBase != null) parts.push(`${fmt(costPerBase * 1000)}€/kg`)
+        return parts.join(' → ')
+    }
+
+    // baseUnit = 'ud' or anything else
+    // "Caja de 12 ud → 10.80€/caja → 0.90€/ud"
+    const parts: string[] = []
+    parts.push(`${formato} de ${envases} ud`)
+    parts.push(`${fmt(unitPrice)}€/${bultoLabel}`)
+    if (costPerPackaged != null) parts.push(`${fmt(costPerPackaged)}€/ud`)
+    return parts.join(' → ')
+}
+
 // ─── Main RevisionClient component ───────────────────────────────────────────
 
 export default function RevisionClient({ document: doc, lines, masterItems, providers, venues, priceHistory, fromProvider }: Props) {
@@ -331,6 +425,9 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
     const [autoApprovedExpanded, setAutoApprovedExpanded] = useState(false)
     const [allMarkedPreferred, setAllMarkedPreferred] = useState(false)
     const errorRef = useRef<HTMLDivElement>(null)
+
+    // D-1: Manually-added lines (temp IDs, never in DB until approveDocument runs)
+    const [manualLineIds, setManualLineIds] = useState<string[]>([])
 
     const [secureUrl, setSecureUrl] = useState<string | null>(null)
     const [isLoadingDoc, setIsLoadingDoc] = useState(!!doc.drive_url)
@@ -359,6 +456,40 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
         fetchSecureUrl()
         return () => { isMounted = false }
     }, [doc.drive_url])
+
+    // Historic prices for low_price_confidence lines (master_item_id → last active unit_price)
+    const [historicPrices, setHistoricPrices] = useState<Record<string, number>>({})
+
+    useEffect(() => {
+        const lowConfLines = lines.filter((l) => {
+            const reasons: string[] = (l.ai_interpretation?.review_reasons as string[]) ?? []
+            return reasons.includes('low_price_confidence') && !!l.master_item_id
+        })
+        if (lowConfLines.length === 0 || !doc.provider_id) return
+
+        const supabase = createClient()
+        async function fetchHistoricPrices() {
+            const results: Record<string, number> = {}
+            await Promise.all(
+                lowConfLines.map(async (line) => {
+                    const { data } = await supabase
+                        .from('erp_price_history')
+                        .select('unit_price')
+                        .eq('master_item_id', line.master_item_id!)
+                        .eq('provider_id', doc.provider_id!)
+                        .eq('status', 'active')
+                        .order('created_at', { ascending: false })
+                        .limit(1)
+                        .maybeSingle()
+                    if (data?.unit_price != null) {
+                        results[line.master_item_id!] = data.unit_price
+                    }
+                })
+            )
+            setHistoricPrices(results)
+        }
+        fetchHistoricPrices()
+    }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
     // Initialize document-level editable state
     const [docState, setDocState] = useState(() => {
@@ -419,6 +550,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                 // Producto conocido → conservador, el operario puede cambiarlo
                 is_preferred: !line.master_item_id,
                 overrideAssociation: false,
+                isBreakdownOpen: false,
             }
         }
         return init
@@ -457,23 +589,48 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
         []
     )
 
-    // Derived counts
-    const mappedCount = lines.filter((l) => {
-        const s = lineStates[l.id]
+    // Derived counts (includes manual lines)
+    const allLineIds = [...lines.map((l) => l.id), ...manualLineIds]
+    const mappedCount = allLineIds.filter((id) => {
+        const s = lineStates[id]
         return s?.selectedId && s.selectedId !== null
     }).length
-    const totalCount = lines.length
+    const totalCount = allLineIds.length
     // Lines without a DB master_item_id — genuinely new products needing human confirmation
     const unmappedCount = lines.filter((l) => !l.master_item_id).length
 
-    // Dynamic Accounting sum
-    const sumOfLines = lines.reduce((acc, line) => {
-        const state = lineStates[line.id]
+    // Dynamic Accounting sum (includes manually-added lines)
+    const sumOfLines = [...lines.map(l => l.id), ...manualLineIds].reduce((acc, id) => {
+        const state = lineStates[id]
         if (!state) return acc
-        const qty = state.quantity || 0
-        const price = state.unit_price || 0
-        return acc + (qty * price)
+        return acc + (state.quantity || 0) * (state.unit_price || 0)
     }, 0)
+
+    // D-2: IVA breakdown state (operator-entered footer amounts from the paper doc)
+    const [docIvaInputs, setDocIvaInputs] = useState<Record<string, string>>({ '4': '', '10': '', '21': '' })
+
+    // D-2: Compute breakdown per IVA rate using current lineStates
+    const ivaRates = [4, 10, 21]
+    const ivaBreakdown = ivaRates.map((rate) => {
+        const rateLines = lines.filter((l) => {
+            const aiIva = (l.ai_interpretation?.normalization_step as Record<string, unknown> | null | undefined)?.iva_percent
+                ?? (l.ai_interpretation?.iva_percent as number | null | undefined)
+            const effectiveIva = l.iva_percent ?? Number(aiIva) ?? null
+            return effectiveIva === rate
+        })
+        const base = rateLines.reduce((sum, l) => {
+            const s = lineStates[l.id]
+            return sum + (s?.quantity || 0) * (s?.unit_price || 0)
+        }, 0)
+        const calculatedIva = base * (rate / 100)
+        const enteredIva = parseFloat(docIvaInputs[String(rate)]) || null
+        const hasDiscrepancy = enteredIva !== null && Math.abs(enteredIva - calculatedIva) > 0.01
+        return { rate, base, calculatedIva, enteredIva, hasDiscrepancy }
+    })
+    const totalCalculado = ivaBreakdown.reduce((s, g) => s + g.base + g.calculatedIva, 0)
+    // displayTotalAmount is declared below; use same formula here to avoid forward reference
+    const effectiveTotalForDelta = docState.doc_type === 'presupuesto' ? sumOfLines : docState.total_amount
+    const deltaDoc = (effectiveTotalForDelta ?? 0) - totalCalculado
 
     // Check if there is an accounting mismatch (tolerance $0.10 for the live banner)
     const mismatchAmount = Math.abs(sumOfLines - docState.total_amount)
@@ -484,6 +641,38 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
 
     // Force total amount to equal sumOfLines if doc_type is presupuesto
     const displayTotalAmount = docState.doc_type === 'presupuesto' ? sumOfLines : docState.total_amount
+
+    function handleAddManualLine() {
+        const tempId = `manual-${Date.now()}`
+        setManualLineIds((prev) => [...prev, tempId])
+        setLineStates((prev) => ({
+            ...prev,
+            [tempId]: {
+                selectedId: null,
+                newItemName: '',
+                newItemCategory: '',
+                newItemBaseUnit: 'ud',
+                expanded: true,
+                quantity: 1,
+                unit_price: null,
+                formato_compra: 'Unidad',
+                envases_por_formato: 1,
+                contenido_por_envase: 1,
+                is_preferred: true,
+                overrideAssociation: false,
+                isBreakdownOpen: false,
+            },
+        }))
+    }
+
+    function handleRemoveManualLine(tempId: string) {
+        setManualLineIds((prev) => prev.filter((id) => id !== tempId))
+        setLineStates((prev) => {
+            const next = { ...prev }
+            delete next[tempId]
+            return next
+        })
+    }
 
     function handleDocTypeChange(newType: string) {
         setDocState((prev) => {
@@ -497,6 +686,35 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
     }
 
     async function buildAndSubmit() {
+        const buildLineEntry = (id: string, rawName: string | null, reviewStatus: string | null, aiInterp: Record<string, unknown> | null, isNew: boolean) => {
+            const state = lineStates[id]
+            const lineTotalCost = (state.quantity || 0) * (state.unit_price || 0)
+            return {
+                purchase_line_id: id,
+                is_new_line: isNew,
+                quantity: state.quantity,
+                unit_price: state.unit_price,
+                line_total_cost: lineTotalCost,
+                formato_compra: state.formato_compra,
+                envases_por_formato: state.envases_por_formato,
+                contenido_por_envase: state.contenido_por_envase,
+                resolution: state.selectedId === '__new__'
+                    ? {
+                        action: 'create_and_link' as const,
+                        new_official_name: state.newItemName,
+                        new_item_category: state.newItemCategory,
+                        new_item_base_unit: state.newItemBaseUnit,
+                    }
+                    : state.selectedId
+                        ? { action: 'link_existing' as const, master_item_id: state.selectedId }
+                        : { action: 'skip' as const },
+                raw_name: rawName,
+                review_status: reviewStatus,
+                ai_interpretation: aiInterp,
+                is_preferred: state.is_preferred,
+            }
+        }
+
         const payload = {
             document: {
                 id: doc.id,
@@ -510,33 +728,15 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                     ? { action: 'create_and_link' as const, new_provider_name: docState.newProviderName }
                     : { action: 'link_existing' as const, provider_id: docState.provider_id! }
             },
-            lines: lines.map((line) => {
-                const state = lineStates[line.id]
-                const lineTotalCost = (state.quantity || 0) * (state.unit_price || 0)
-                return {
-                    purchase_line_id: line.id,
-                    quantity: state.quantity,
-                    unit_price: state.unit_price,
-                    line_total_cost: lineTotalCost,
-                    formato_compra: state.formato_compra,
-                    envases_por_formato: state.envases_por_formato,
-                    contenido_por_envase: state.contenido_por_envase,
-                    resolution: state.selectedId === '__new__'
-                        ? {
-                            action: 'create_and_link' as const,
-                            new_official_name: state.newItemName,
-                            new_item_category: state.newItemCategory,
-                            new_item_base_unit: state.newItemBaseUnit,
-                        }
-                        : state.selectedId
-                            ? { action: 'link_existing' as const, master_item_id: state.selectedId }
-                            : { action: 'skip' as const },
-                    raw_name: line.raw_name,
-                    review_status: line.review_status ?? null,
-                    ai_interpretation: line.ai_interpretation as Record<string, unknown> | null,
-                    is_preferred: state.is_preferred,
-                }
-            }),
+            lines: [
+                ...lines.map((line) => buildLineEntry(
+                    line.id, line.raw_name, line.review_status ?? null,
+                    line.ai_interpretation as Record<string, unknown> | null, false
+                )),
+                ...manualLineIds.map((tempId) => buildLineEntry(
+                    tempId, lineStates[tempId]?.newItemName || null, 'pending_review', null, true
+                )),
+            ],
         }
 
         setIsSubmitting(true)
@@ -606,6 +806,9 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
     if (isMismatch) warnings.push(`Descuadre contable de $${mismatchAmount.toFixed(2)}`)
     if (newProductCount > 0) warnings.push(`${newProductCount} producto${newProductCount > 1 ? 's' : ''} nuevo${newProductCount > 1 ? 's' : ''} a confirmar`)
     if (lowConfidenceCount > 0) warnings.push(`${lowConfidenceCount} precio${lowConfidenceCount > 1 ? 's' : ''} con confianza baja`)
+
+    // D-3: Toggle "Ver en orden del documento"
+    const [docOrder, setDocOrder] = useState(false)
 
     // Separar líneas en dos grupos
     const pendingLines = lines.filter(l =>
@@ -858,12 +1061,77 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                         </dl>
                     </div>
 
+                    {/* Card 1b: Validación totales / IVA */}
+                    <div className="bg-white dark:bg-card border rounded-xl shadow-sm p-4 sm:p-5">
+                        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide pb-3 mb-3 border-b border-border/50">
+                            Validación de totales
+                        </h2>
+                        <div className="space-y-1.5">
+                            {/* Header row */}
+                            <div className="grid grid-cols-4 gap-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground px-1">
+                                <span>Tipo IVA</span>
+                                <span className="text-right">Base</span>
+                                <span className="text-right">IVA calculado</span>
+                                <span className="text-right">IVA en doc.</span>
+                            </div>
+                            {ivaBreakdown.map(({ rate, base, calculatedIva, enteredIva, hasDiscrepancy }) => (
+                                <div key={rate} className={`grid grid-cols-4 gap-2 items-center rounded px-1 py-1 text-sm ${hasDiscrepancy ? 'bg-red-50 dark:bg-red-950/20' : ''}`}>
+                                    <span className="text-xs text-muted-foreground">IVA {rate}%</span>
+                                    <span className="text-right tabular-nums text-xs">{base.toFixed(2)} €</span>
+                                    <span className={`text-right tabular-nums text-xs font-medium ${hasDiscrepancy ? 'text-red-600' : ''}`}>
+                                        {calculatedIva.toFixed(2)} €
+                                        {hasDiscrepancy && <span className="ml-1">⚠ Descuadre</span>}
+                                    </span>
+                                    <div className="flex justify-end">
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min="0"
+                                            value={docIvaInputs[String(rate)]}
+                                            onChange={(e) => setDocIvaInputs((prev) => ({ ...prev, [String(rate)]: e.target.value }))}
+                                            placeholder={calculatedIva.toFixed(2)}
+                                            className={`w-24 rounded border px-2 py-0.5 text-right text-xs focus:outline-none focus:ring-1 ${hasDiscrepancy ? 'border-red-400 focus:ring-red-400 bg-red-50' : 'border-input focus:ring-ring bg-background'}`}
+                                        />
+                                    </div>
+                                </div>
+                            ))}
+                            {/* Total row */}
+                            <div className="grid grid-cols-4 gap-2 items-center border-t border-border/50 pt-1.5 mt-1">
+                                <span className="col-span-2 text-xs font-semibold">Total calculado</span>
+                                <span className="text-right tabular-nums text-sm font-bold">{totalCalculado.toFixed(2)} €</span>
+                                <div />
+                            </div>
+                            {/* Delta row */}
+                            <div className="grid grid-cols-4 gap-2 items-center">
+                                <span className="col-span-2 text-xs text-muted-foreground">Total según doc.</span>
+                                <span className="text-right tabular-nums text-xs">{displayTotalAmount?.toFixed(2) ?? '—'} €</span>
+                                <div />
+                            </div>
+                            <div className={`flex items-center justify-between rounded px-2 py-1.5 text-sm font-semibold mt-1 ${Math.abs(deltaDoc) <= 0.01 ? 'bg-green-50 text-green-700 dark:bg-green-950/20' : 'bg-red-50 text-red-700 dark:bg-red-950/20'}`}>
+                                <span>Delta</span>
+                                <span className="tabular-nums">
+                                    {Math.abs(deltaDoc) <= 0.01
+                                        ? '✓ Cuadra'
+                                        : `${deltaDoc > 0 ? '+' : ''}${deltaDoc.toFixed(2)} €`}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
                     {/* Card 2: Líneas de Compra */}
                     <div className="bg-white dark:bg-card border rounded-xl shadow-sm flex flex-col">
-                        <div className="px-4 sm:px-5 py-3 border-b">
+                        <div className="px-4 sm:px-5 py-3 border-b flex items-center justify-between">
                             <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
                                 Líneas de Compra ({lines.length})
                             </h2>
+                            <button
+                                type="button"
+                                onClick={() => setDocOrder((v) => !v)}
+                                className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors ${docOrder ? 'border-primary bg-primary/5 text-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}
+                                title="Ver líneas en el orden original del documento"
+                            >
+                                {docOrder ? '↕ Orden doc.' : '↕ Orden revisión'}
+                            </button>
                         </div>
 
                         <div className="p-4 sm:p-5 bg-slate-50/50">
@@ -874,7 +1142,74 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                             )}
 
                             <div className="space-y-2">
-                                {pendingLines.map((line) => {
+                                {/* D-3: docOrder view — all lines in original order, auto_approved minimized */}
+                                {docOrder && lines.map((line) => {
+                                    const state = lineStates[line.id]
+                                    if (!state) return null
+                                    const isAutoApproved = line.review_status === 'auto_approved' || (!line.review_status && !!line.master_item_id)
+                                    const isPending = line.review_status === 'pending_review' || (!line.review_status && !line.master_item_id)
+                                    return (
+                                        <div
+                                            key={line.id}
+                                            className="rounded-lg border transition-all duration-200"
+                                            style={
+                                                isAutoApproved
+                                                    ? { borderColor: '#3B6D11', borderWidth: '0.5px', backgroundColor: '#ffffff' }
+                                                    : { borderColor: '#BA7517', borderWidth: '1.5px', backgroundColor: '#FAEEDA' }
+                                            }
+                                        >
+                                            {isAutoApproved ? (
+                                                /* Minimized row for auto_approved */
+                                                <button
+                                                    type="button"
+                                                    onClick={() => toggleExpand(line.id)}
+                                                    className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left hover:bg-black/5"
+                                                >
+                                                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                                                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" style={{ color: '#3B6D11' }} />
+                                                        <span className="min-w-0 truncate text-sm" title={line.raw_name || ''}>{line.raw_name}</span>
+                                                        {line.is_envase_retornable && (
+                                                            <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">♻</span>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
+                                                        <span>×{state.quantity}</span>
+                                                        {state.unit_price != null && <span>${state.unit_price.toFixed(2)}/u</span>}
+                                                        <span className="font-semibold text-foreground">${((state.quantity || 0) * (state.unit_price || 0)).toFixed(2)}</span>
+                                                        {state.expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                                                    </div>
+                                                </button>
+                                            ) : (
+                                                /* Full header for pending lines (same as normal view) */
+                                                <button
+                                                    type="button"
+                                                    onClick={() => toggleExpand(line.id)}
+                                                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-black/5"
+                                                >
+                                                    <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                                                        <AlertTriangle className="h-4 w-4 shrink-0" style={{ color: '#BA7517' }} />
+                                                        <span className="min-w-0 truncate text-sm font-medium" style={{ color: '#412402' }}>{line.raw_name}</span>
+                                                    </div>
+                                                    <div className="flex shrink-0 items-center gap-4">
+                                                        <span className="text-xs text-muted-foreground">×{state.quantity}</span>
+                                                        {state.unit_price != null && <span className="text-xs text-muted-foreground">${state.unit_price.toFixed(2)}/u</span>}
+                                                        <span className="text-sm font-semibold">${((state.quantity || 0) * (state.unit_price || 0)).toFixed(2)}</span>
+                                                        {state.expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                                                    </div>
+                                                </button>
+                                            )}
+                                            {/* Expanded body only shown for pending lines or explicitly expanded auto_approved */}
+                                            {state.expanded && !isAutoApproved && isPending && (
+                                                <div className="border-t border-current/10 px-4 py-2 text-xs text-muted-foreground italic">
+                                                    Abrir en vista normal para editar esta línea
+                                                </div>
+                                            )}
+                                        </div>
+                                    )
+                                })}
+
+                                {/* Normal review-order view */}
+                                {!docOrder && pendingLines.map((line) => {
                                     const state = lineStates[line.id]
                                     const isNew = state.selectedId === '__new__'
                                     const isMapped = !!line.master_item_id
@@ -885,6 +1220,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                     const isAutoApproved = reviewStatus === 'auto_approved'
                                     const isPendingPrice = reviewStatus === 'pending_review' && reviewReasons.includes('low_price_confidence')
                                     const isPendingNew = reviewStatus === 'pending_review' && reviewReasons.includes('new_product')
+                                    const isPriceIncrease = reviewStatus === 'pending_review' && reviewReasons.includes('price_increase')
                                     // Fallback para líneas sin review_status (documentos anteriores al nuevo sistema)
                                     const isLegacyMapped = !reviewStatus && isMapped
                                     const isLegacyUnmapped = !reviewStatus && !isMapped
@@ -927,6 +1263,11 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                     <span className="min-w-0 truncate text-sm font-medium" title={line.raw_name || 'Producto sin identificar'} style={isManuallySkipped ? { color: '#94a3b8' } : (!isMapped ? { color: '#412402' } : undefined)}>
                                                         {line.raw_name || <span className="italic text-muted-foreground">Producto sin identificar</span>}
                                                     </span>
+                                                    {line.is_envase_retornable && (
+                                                        <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                                                            ♻ Envase retornable
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <div className="flex shrink-0 items-center gap-4">
                                                     {showPriceAlert && (
@@ -959,15 +1300,36 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                             />
                                                         </div>
                                                         <div>
-                                                            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Precio/u ($)</label>
+                                                            <div className="flex items-center gap-1.5">
+                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Precio/u ($)</label>
+                                                                {isPendingPrice && (
+                                                                    <Badge variant="outline" className="border-amber-400 text-amber-600 text-[10px] py-0 h-4">⚠️ Verificar precio</Badge>
+                                                                )}
+                                                            </div>
                                                             <input
                                                                 type="number"
                                                                 step="any"
                                                                 min="0"
                                                                 value={state.unit_price ?? ''}
                                                                 onChange={(e) => updateLine(line.id, { unit_price: e.target.value ? Number(e.target.value) : null })}
-                                                                className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                                className={`mt-1.5 flex h-8 w-full rounded-md border bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 ${isPendingPrice ? 'border-amber-400 focus-visible:ring-amber-400' : 'border-input focus-visible:ring-ring'}`}
                                                             />
+                                                            {isPendingPrice && line.master_item_id && historicPrices[line.master_item_id] != null && (() => {
+                                                                const hist = historicPrices[line.master_item_id!]
+                                                                const delta = state.unit_price != null && hist > 0
+                                                                    ? ((state.unit_price - hist) / hist) * 100
+                                                                    : null
+                                                                return (
+                                                                    <p className="mt-1 text-sm text-muted-foreground">
+                                                                        Último precio registrado: <span className="font-medium">{hist.toFixed(2)}€</span>
+                                                                        {delta !== null && Math.abs(delta) > 5 && (
+                                                                            <span className="ml-1 text-amber-600">
+                                                                                {delta > 0 ? `(▲ ${delta.toFixed(1)}% vs anterior)` : `(▼ ${Math.abs(delta).toFixed(1)}% vs anterior)`}
+                                                                            </span>
+                                                                        )}
+                                                                    </p>
+                                                                )
+                                                            })()}
                                                         </div>
                                                         <div className="flex flex-col justify-end">
                                                             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Total línea</label>
@@ -983,6 +1345,43 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                             <span>Campos pre-rellenados con sugerencia IA — edita si es necesario.</span>
                                                         </p>
                                                     )}
+
+                                                    {isPendingNew && (() => {
+                                                        const isExistingMaster = line.ai_interpretation?.is_existing_master === true
+                                                        const suggestedId = line.ai_interpretation?.suggested_master_item_id as string | null | undefined
+                                                        const suggestedItem = suggestedId ? masterItems.find(m => m.id === suggestedId) : null
+                                                        if (!isExistingMaster || !suggestedItem || state.selectedId === suggestedItem.id) return null
+                                                        return (
+                                                            <div className="rounded-md border border-violet-200 bg-violet-50 dark:border-violet-800 dark:bg-violet-950/30 px-3 py-2.5 flex items-start gap-2.5">
+                                                                <span className="text-base leading-tight mt-0.5">🤖</span>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className="text-sm text-violet-700 dark:text-violet-300">
+                                                                        La IA cree que este producto ya existe como:
+                                                                    </p>
+                                                                    <p className="text-sm font-semibold text-violet-900 dark:text-violet-100 mt-0.5">
+                                                                        {suggestedItem.official_name}
+                                                                        <span className="ml-1.5 text-xs font-normal text-violet-500">({suggestedItem.base_unit})</span>
+                                                                    </p>
+                                                                    <div className="mt-2 flex gap-2">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => updateLine(line.id, { selectedId: suggestedItem.id, newItemName: '' })}
+                                                                            className="text-xs font-medium px-2.5 py-1 rounded-md bg-violet-600 text-white hover:bg-violet-700 transition-colors"
+                                                                        >
+                                                                            Sí, es el mismo
+                                                                        </button>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => updateLine(line.id, { selectedId: '__new__' })}
+                                                                            className="text-xs font-medium px-2.5 py-1 rounded-md border border-violet-300 text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-900/30 transition-colors"
+                                                                        >
+                                                                            No, crear nuevo
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        )
+                                                    })()}
 
                                                     <div>
                                                         <label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -1007,6 +1406,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                                     items={masterItems}
                                                                     value={state.selectedId}
                                                                     newItemName={state.newItemName}
+                                                                    suggestedName={(line.ai_interpretation?.normalization_step as Record<string, unknown> | null)?.official_name as string | null ?? null}
                                                                     onChange={(id, newName) => updateLine(line.id, { selectedId: id, newItemName: newName })}
                                                                 />
                                                                 {state.selectedId === '__new__' && (
@@ -1059,7 +1459,33 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                         )}
                                                     </div>
 
-                                                    {(isPendingNew || isLegacyUnmapped || isNew) && (
+                                                    {isPendingNew && (() => {
+                                                        const norm = (line.ai_interpretation?.normalization_step as Record<string, unknown> | null | undefined) ?? null
+                                                        const preview = buildCostPreview(state.unit_price, norm)
+                                                        return (
+                                                            <div className="space-y-1.5">
+                                                                {preview && (
+                                                                    <div className="rounded-md bg-muted/40 px-3 py-2 text-sm flex flex-wrap gap-x-1 items-center">
+                                                                        {preview.split(' → ').map((part, i, arr) => (
+                                                                            <span key={i} className="flex items-center gap-x-1">
+                                                                                <span className="font-medium">{part}</span>
+                                                                                {i < arr.length - 1 && <span className="text-muted-foreground">→</span>}
+                                                                            </span>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => updateLine(line.id, { isBreakdownOpen: !state.isBreakdownOpen })}
+                                                                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                                                >
+                                                                    {state.isBreakdownOpen ? '▲ Cerrar desglose' : '✏️ Editar desglose'}
+                                                                </button>
+                                                            </div>
+                                                        )
+                                                    })()}
+
+                                                    {((isPendingNew && state.isBreakdownOpen) || isLegacyUnmapped || (isNew && !isPendingNew)) && (
                                                         <div className="grid grid-cols-3 gap-3 rounded-md bg-secondary/30 p-3 mt-1">
                                                             <div>
                                                                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Formato de compra <FieldTooltip text="Formato en que se compra. Ej: 'Caja' si comprás cajas cerradas, 'Barril' si comprás un barril, 'Unidad' si comprás pieza a pieza." /></label>
@@ -1118,7 +1544,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                     </button>
                                                 </div>
 
-                                                {(isPendingPrice || isPendingNew || isLegacyUnmapped) && (
+                                                {(isPendingPrice || isPendingNew || isLegacyUnmapped) && !isPriceIncrease && (
                                                     <div className="flex justify-end pt-1">
                                                         <button
                                                             type="button"
@@ -1135,7 +1561,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                 )
                             })}
 
-                            {approvedLines.length > 0 && (
+                            {!docOrder && approvedLines.length > 0 && (
                                     <div className="mt-3">
                                         <button
                                             type="button"
@@ -1168,6 +1594,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                     const isAutoApproved = reviewStatus === 'auto_approved'
                                                     const isPendingPrice = reviewStatus === 'pending_review' && reviewReasons.includes('low_price_confidence')
                                                     const isPendingNew = reviewStatus === 'pending_review' && reviewReasons.includes('new_product')
+                                                    const isPriceIncrease = reviewStatus === 'pending_review' && reviewReasons.includes('price_increase')
                                                     const isLegacyMapped = !reviewStatus && isMapped
                                                     const isLegacyUnmapped = !reviewStatus && !isMapped
                                                     const isManuallySkipped = reviewStatus === 'pending_review' && state.selectedId === null
@@ -1263,6 +1690,43 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                                         </p>
                                                                     )}
 
+                                                                    {isPendingNew && (() => {
+                                                                        const isExistingMaster = line.ai_interpretation?.is_existing_master === true
+                                                                        const suggestedId = line.ai_interpretation?.suggested_master_item_id as string | null | undefined
+                                                                        const suggestedItem = suggestedId ? masterItems.find(m => m.id === suggestedId) : null
+                                                                        if (!isExistingMaster || !suggestedItem || state.selectedId === suggestedItem.id) return null
+                                                                        return (
+                                                                            <div className="rounded-md border border-violet-200 bg-violet-50 dark:border-violet-800 dark:bg-violet-950/30 px-3 py-2.5 flex items-start gap-2.5">
+                                                                                <span className="text-base leading-tight mt-0.5">🤖</span>
+                                                                                <div className="flex-1 min-w-0">
+                                                                                    <p className="text-sm text-violet-700 dark:text-violet-300">
+                                                                                        La IA cree que este producto ya existe como:
+                                                                                    </p>
+                                                                                    <p className="text-sm font-semibold text-violet-900 dark:text-violet-100 mt-0.5">
+                                                                                        {suggestedItem.official_name}
+                                                                                        <span className="ml-1.5 text-xs font-normal text-violet-500">({suggestedItem.base_unit})</span>
+                                                                                    </p>
+                                                                                    <div className="mt-2 flex gap-2">
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            onClick={() => updateLine(line.id, { selectedId: suggestedItem.id, newItemName: '' })}
+                                                                                            className="text-xs font-medium px-2.5 py-1 rounded-md bg-violet-600 text-white hover:bg-violet-700 transition-colors"
+                                                                                        >
+                                                                                            Sí, es el mismo
+                                                                                        </button>
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            onClick={() => updateLine(line.id, { selectedId: '__new__' })}
+                                                                                            className="text-xs font-medium px-2.5 py-1 rounded-md border border-violet-300 text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-900/30 transition-colors"
+                                                                                        >
+                                                                                            No, crear nuevo
+                                                                                        </button>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                        )
+                                                                    })()}
+
                                                                     <div>
                                                                         <label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wide">
                                                                             Producto maestro
@@ -1271,6 +1735,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                                             items={masterItems}
                                                                             value={state.selectedId}
                                                                             newItemName={state.newItemName}
+                                                                            suggestedName={(line.ai_interpretation?.normalization_step as Record<string, unknown> | null)?.official_name as string | null ?? null}
                                                                             onChange={(id, newName) => updateLine(line.id, { selectedId: id, newItemName: newName })}
                                                                         />
                                                                         {state.selectedId === '__new__' && (
@@ -1380,7 +1845,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                                     </button>
                                                                 </div>
 
-                                                                {(isPendingPrice || isPendingNew || isLegacyUnmapped) && (
+                                                                {(isPendingPrice || isPendingNew || isLegacyUnmapped) && !isPriceIncrease && (
                                                                     <div className="flex justify-end pt-1">
                                                                         <button
                                                                             type="button"
@@ -1400,6 +1865,135 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                         )}
                                     </div>
                                 )}
+
+                                {/* D-1: Manually added lines */}
+                                {manualLineIds.map((tempId) => {
+                                    const state = lineStates[tempId]
+                                    if (!state) return null
+                                    return (
+                                        <div
+                                            key={tempId}
+                                            className="rounded-lg border border-dashed transition-all"
+                                            style={{ borderColor: '#BA7517', borderWidth: '1.5px', backgroundColor: '#FAEEDA' }}
+                                        >
+                                            {/* Header */}
+                                            <div className="flex w-full items-center justify-between gap-3 px-4 py-3">
+                                                <div className="flex min-w-0 flex-1 items-center gap-2">
+                                                    <Plus className="h-4 w-4 shrink-0 text-amber-600" />
+                                                    <input
+                                                        type="text"
+                                                        value={state.newItemName}
+                                                        onChange={(e) => updateLine(tempId, { newItemName: e.target.value })}
+                                                        placeholder="Nombre del producto en el documento..."
+                                                        className="min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                                                    />
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleRemoveManualLine(tempId)}
+                                                    className="shrink-0 text-muted-foreground hover:text-destructive transition-colors"
+                                                    title="Eliminar línea"
+                                                >
+                                                    <Trash2 className="h-4 w-4" />
+                                                </button>
+                                            </div>
+
+                                            {/* Expanded body — always open for manual lines */}
+                                            <div className="border-t border-current/10 px-4 py-3 space-y-3 bg-white rounded-b-lg">
+                                                <div className="grid grid-cols-3 gap-4 text-sm bg-accent/30 rounded-md p-3 border border-border/50">
+                                                    <div>
+                                                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Cantidad</label>
+                                                        <input type="number" step="any" min="0" value={state.quantity || ''}
+                                                            onChange={(e) => updateLine(tempId, { quantity: Number(e.target.value) })}
+                                                            className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Precio/u ($)</label>
+                                                        <input type="number" step="any" min="0" value={state.unit_price ?? ''}
+                                                            onChange={(e) => updateLine(tempId, { unit_price: e.target.value ? Number(e.target.value) : null })}
+                                                            className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                                                    </div>
+                                                    <div className="flex flex-col justify-end">
+                                                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Total</label>
+                                                        <p className="flex h-8 items-center font-bold text-primary px-1">
+                                                            ${((state.quantity || 0) * (state.unit_price || 0)).toFixed(2)}
+                                                        </p>
+                                                    </div>
+                                                </div>
+
+                                                <div>
+                                                    <label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wide">Producto maestro</label>
+                                                    <CreatableCombobox
+                                                        items={masterItems}
+                                                        value={state.selectedId}
+                                                        newItemName={state.newItemName}
+                                                        onChange={(id, newName) => updateLine(tempId, { selectedId: id, newItemName: newName })}
+                                                    />
+                                                    {state.selectedId === '__new__' && (
+                                                        <div className="mt-3 p-3 bg-blue-50/50 border border-blue-100 rounded-md space-y-3">
+                                                            <p className="text-xs font-medium text-blue-700">Se creará en el catálogo maestro. Verifica o corrige:</p>
+                                                            <div>
+                                                                <label className="text-[10px] font-semibold text-blue-600/70 uppercase">Nombre</label>
+                                                                <input type="text" value={state.newItemName} onChange={(e) => updateLine(tempId, { newItemName: e.target.value })}
+                                                                    className="mt-1 block w-full h-7 rounded-sm border-blue-200 bg-white px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500" />
+                                                            </div>
+                                                            <div className="grid grid-cols-2 gap-3">
+                                                                <div>
+                                                                    <label className="text-[10px] font-semibold text-blue-600/70 uppercase">Categoría</label>
+                                                                    <select value={state.newItemCategory} onChange={(e) => updateLine(tempId, { newItemCategory: e.target.value })}
+                                                                        className="mt-1 block w-full h-7 rounded-sm border-blue-200 bg-white px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500">
+                                                                        <option value="">— Seleccionar —</option>
+                                                                        {PRODUCT_CATEGORIES.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
+                                                                    </select>
+                                                                </div>
+                                                                <div>
+                                                                    <label className="text-[10px] font-semibold text-blue-600/70 uppercase">Unidad Base</label>
+                                                                    <select value={state.newItemBaseUnit} onChange={(e) => updateLine(tempId, { newItemBaseUnit: e.target.value })}
+                                                                        className="mt-1 block w-full h-7 rounded-sm border-blue-200 bg-white px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500">
+                                                                        {BASE_UNITS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                                                                    </select>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                <div className="grid grid-cols-3 gap-3 rounded-md bg-secondary/30 p-3">
+                                                    <div>
+                                                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Formato de compra</label>
+                                                        <select value={state.formato_compra} onChange={(e) => updateLine(tempId, { formato_compra: e.target.value })}
+                                                            className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                                                            {FORMATOS_COMPRA.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Envases/formato</label>
+                                                        <input type="number" step="any" min="0" value={state.envases_por_formato}
+                                                            onChange={(e) => updateLine(tempId, { envases_por_formato: Number(e.target.value) })}
+                                                            className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Contenido/envase</label>
+                                                        <input type="number" step="any" min="0" value={state.contenido_por_envase}
+                                                            onChange={(e) => updateLine(tempId, { contenido_por_envase: Number(e.target.value) })}
+                                                            className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+
+                                {/* Add manual line button */}
+                                <button
+                                    type="button"
+                                    onClick={handleAddManualLine}
+                                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border py-2.5 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+                                >
+                                    <Plus className="h-4 w-4" />
+                                    Añadir línea
+                                </button>
+
                             </div>
                         </div>
 

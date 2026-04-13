@@ -23,6 +23,7 @@ export type DocumentRow = {
     referenced_delivery_notes: string[] | null
     parent_invoice_id: string | null
     created_at: string
+    has_skipped_lines: boolean
 }
 
 const PAGE_SIZE = 25
@@ -52,8 +53,20 @@ export default async function DocumentosPage({
     const documentNumber = (params.document_number as string) ?? ''
     const docTypesRaw = params.doc_type as string | undefined
     const docTypes = docTypesRaw ? docTypesRaw.split(',').filter(Boolean) : []
+    const hasPendingLines = params.has_pending_lines === 'true'
 
     const providers = await getProviders()
+
+    // When filtering by pending lines: first fetch the document IDs that qualify.
+    // (PostgREST cannot express EXISTS as a column predicate, so we pre-resolve the IDs.)
+    let pendingLinesDocIds: string[] | null = null
+    if (hasPendingLines) {
+        const { data: pendingRows } = await supabase
+            .from('erp_purchase_lines')
+            .select('document_id')
+            .eq('review_status', 'skipped')
+        pendingLinesDocIds = [...new Set((pendingRows ?? []).map((r) => (r as { document_id: string }).document_id))]
+    }
 
     // Build query — select defined here, filters applied via shared helper
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -63,6 +76,16 @@ export default async function DocumentosPage({
             'id, doc_type, document_number, document_date, total_amount, status, reconciliation_status, reconciliation_delta, provider_id, referenced_delivery_notes, parent_invoice_id, created_at, erp_providers(name)',
             { count: 'exact' },
         )
+
+    // Apply pending-lines ID filter before shared filters
+    if (hasPendingLines) {
+        if (pendingLinesDocIds && pendingLinesDocIds.length > 0) {
+            query = query.in('id', pendingLinesDocIds)
+        } else {
+            // No documents qualify — short-circuit with impossible condition
+            query = query.in('id', ['00000000-0000-0000-0000-000000000000'])
+        }
+    }
 
     query = applyDocumentFilters(query, {
         sort,
@@ -91,6 +114,20 @@ export default async function DocumentosPage({
         )
     }
 
+    // Secondary query: which of the current page's documents have skipped lines?
+    // Used to show the "⚠ Líneas pendientes" badge without affecting the main filter.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const currentPageIds = (data as any[]).map((d) => d.id as string)
+    let skippedDocIds = new Set<string>()
+    if (currentPageIds.length > 0) {
+        const { data: skippedRows } = await supabase
+            .from('erp_purchase_lines')
+            .select('document_id')
+            .eq('review_status', 'skipped')
+            .in('document_id', currentPageIds)
+        skippedDocIds = new Set((skippedRows ?? []).map((r) => (r as { document_id: string }).document_id))
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const documents: DocumentRow[] = (data as any[]).map((d) => ({
         id: d.id,
@@ -106,6 +143,7 @@ export default async function DocumentosPage({
         referenced_delivery_notes: d.referenced_delivery_notes,
         parent_invoice_id: d.parent_invoice_id,
         created_at: d.created_at,
+        has_skipped_lines: skippedDocIds.has(d.id),
     }))
 
     return (

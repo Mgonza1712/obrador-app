@@ -257,6 +257,14 @@ export default function DocumentosClient({
         })
     }
 
+    function handlePendingLinesToggle() {
+        const current = new URLSearchParams(window.location.search)
+        const isActive = current.get('has_pending_lines') === 'true'
+        startTransition(() => {
+            router.push(buildUrl(pathname, current, { has_pending_lines: isActive ? null : 'true' }))
+        })
+    }
+
     // ── Export ──────────────────────────────────────────────────────────────────
     async function handleExport() {
         setIsExporting(true)
@@ -281,8 +289,10 @@ export default function DocumentosClient({
     }
 
     const totalPages = Math.ceil(total / pageSize)
+        const currentHasPendingLines = currentParams.get('has_pending_lines') === 'true'
+
     const hasActiveFilters = currentDocTypes.length > 0 || currentStatus || currentReconcStatus ||
-        currentProviderId || currentDateFrom || currentDateTo || currentAmountMin || currentAmountMax || currentDocNumber
+        currentProviderId || currentDateFrom || currentDateTo || currentAmountMin || currentAmountMax || currentDocNumber || currentHasPendingLines
 
     return (
         <div className="space-y-4">
@@ -529,6 +539,21 @@ export default function DocumentosClient({
                         </div>
                     </div>
 
+                    {/* Pending lines toggle */}
+                    <div className="flex items-center gap-3 pt-1 border-t border-border">
+                        <button
+                            onClick={handlePendingLinesToggle}
+                            className={`flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition-colors ${currentHasPendingLines ? 'border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300' : 'border-border text-muted-foreground hover:text-foreground'}`}
+                        >
+                            <span className="text-amber-500">⚠</span>
+                            Líneas pendientes
+                            {currentHasPendingLines && (
+                                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                            )}
+                        </button>
+                        <span className="text-xs text-muted-foreground">Solo documentos con líneas sin vincular</span>
+                    </div>
+
                     {/* Clear filters */}
                     <button
                         onClick={handleClearFilters}
@@ -641,6 +666,11 @@ export default function DocumentosClient({
                                                 >
                                                     {doc.status === 'approved' ? 'Aprobado' : doc.status === 'pending_review' ? 'En revisión' : 'Pendiente'}
                                                 </Badge>
+                                                {doc.has_skipped_lines && (
+                                                    <Badge variant="outline" className="w-fit text-xs border-amber-300 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800">
+                                                        ⚠ Líneas pendientes
+                                                    </Badge>
+                                                )}
                                                 <ReconciliationBadge
                                                     status={doc.reconciliation_status}
                                                     delta={doc.reconciliation_delta}

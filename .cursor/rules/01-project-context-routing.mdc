@@ -1,0 +1,14 @@
+---
+description: Route Cursor agents to the right project context files before proposing or implementing changes
+globs:
+alwaysApply: true
+---
+
+Before proposing or implementing changes in this repository:
+
+- Read `README.md` for project overview and the documentation map.
+- Read `CLAUDE.md` for project rules, invariants, and naming conventions.
+- Read `AGENTS.md` for the shared agent workflow.
+- If the work touches invoices, review, pricing, or the catalog, read `docs/domain/documentos-y-revision.md` and `docs/domain/catalogo-y-precios.md`.
+- If the work touches integrations or database behavior, read `docs/integrations/supabase.md` and `docs/integrations/automation-pipeline.md`.
+- If the work changes durable behavior, update the canonical documentation file before closing the task.

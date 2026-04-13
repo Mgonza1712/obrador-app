@@ -38,6 +38,15 @@ export type DocumentFilters = {
     amountMax?: number | null
     documentNumber?: string
     docTypes?: string[]
+    /**
+     * When true: restrict to documents that have at least one purchase_line
+     * with review_status = 'skipped'. The caller (page.tsx) must pre-resolve this
+     * into an .in('id', pendingDocIds) before calling applyDocumentFilters, since
+     * PostgREST cannot express an EXISTS subquery as a plain column predicate.
+     * This field is carried here only to keep the filter type co-located.
+     * The actual .in() filter is applied in page.tsx before this function is called.
+     */
+    hasPendingLines?: boolean
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

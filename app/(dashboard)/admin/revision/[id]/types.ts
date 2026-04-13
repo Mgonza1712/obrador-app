@@ -34,6 +34,8 @@ export interface LineAiInterpretation {
     // Campos de control
     alias_match?: boolean
     is_new_product?: boolean
+    is_existing_master?: boolean
+    suggested_master_item_id?: string | null
     needs_review?: boolean
     review_reasons?: string[]
     model_version?: string | null
@@ -84,6 +86,8 @@ export interface PurchaseLineWithItem {
     line_total_cost: number
     master_item_id: string | null
     raw_name: string | null
+    iva_percent: number | null
+    is_envase_retornable: boolean | null
     ai_interpretation: LineAiInterpretation | null
     review_status: 'auto_approved' | 'pending_review' | 'reviewed' | 'skipped' | null
     erp_master_items: MasterItemRef | null

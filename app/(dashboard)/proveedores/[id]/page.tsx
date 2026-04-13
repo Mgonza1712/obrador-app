@@ -16,6 +16,8 @@ export type ProveedorDetail = {
     is_trusted: boolean | null
     is_active: boolean | null
     shared_pricing: boolean | null
+    price_confidence_threshold: number | null
+    consecutive_clean_approvals: number | null
 }
 
 export type ProductRow = {
@@ -83,6 +85,8 @@ export default async function ProveedorDetailPage({ params }: { params: Promise<
         is_trusted: raw.is_trusted ?? null,
         is_active: raw.is_active ?? null,
         shared_pricing: raw.shared_pricing ?? null,
+        price_confidence_threshold: raw.price_confidence_threshold ?? null,
+        consecutive_clean_approvals: raw.consecutive_clean_approvals ?? null,
     }
 
     // Build latest price per master_item_id map (already sorted desc)

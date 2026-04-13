@@ -26,7 +26,20 @@ export default async function RevisionDetailPage({ params, searchParams }: Props
         .eq('id', id)
         .single()
 
-    if (docError || !docRaw) return notFound()
+    if (docError) {
+        // PGRST116 = no rows returned → genuine 404
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if ((docError as any).code === 'PGRST116') return notFound()
+        return (
+            <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
+                <AlertCircle className="h-10 w-10 text-destructive" />
+                <p className="text-sm text-muted-foreground">
+                    Error al cargar el documento: {docError.message}
+                </p>
+            </div>
+        )
+    }
+    if (!docRaw) return notFound()
 
     // ── 2. Fetch full lists for the dynamic selects (flat, parallel) ──
     const [providersRes, venuesRes] = await Promise.all([
@@ -65,7 +78,7 @@ export default async function RevisionDetailPage({ params, searchParams }: Props
     // ── 3. Fetch purchase lines (flat) ──
     const { data: linesRaw, error: linesError } = await supabase
         .from('erp_purchase_lines')
-        .select('id, quantity, unit_price, line_total_cost, master_item_id, raw_name, ai_interpretation, review_status')
+        .select('id, quantity, unit_price, line_total_cost, master_item_id, raw_name, iva_percent, is_envase_retornable, ai_interpretation, review_status')
         .eq('document_id', id)
 
     if (linesError) {
@@ -86,13 +99,13 @@ export default async function RevisionDetailPage({ params, searchParams }: Props
 
     if (unmappedLines.length > 0) {
         await Promise.all(unmappedLines.map(async (line) => {
-            const { data: alias } = await supabase
+            let aliasQuery = supabase
                 .from('erp_item_aliases')
                 .select('master_item_id')
                 .ilike('raw_name', line.raw_name!)
                 .not('master_item_id', 'is', null)
-                .limit(1)
-                .maybeSingle()
+            if (docRaw.provider_id) aliasQuery = aliasQuery.eq('provider_id', docRaw.provider_id)
+            const { data: alias } = await aliasQuery.limit(1).maybeSingle()
 
             if (alias?.master_item_id) {
                 const { error: updateError } = await supabase
@@ -131,6 +144,8 @@ export default async function RevisionDetailPage({ params, searchParams }: Props
         line_total_cost: l.line_total_cost,
         master_item_id: l.master_item_id,
         raw_name: l.raw_name,
+        iva_percent: l.iva_percent ?? null,
+        is_envase_retornable: l.is_envase_retornable ?? null,
         ai_interpretation: l.ai_interpretation ?? null,
         review_status: l.review_status ?? null,
         erp_master_items: l.master_item_id ? (linkedItemMap.get(l.master_item_id) ?? null) : null,

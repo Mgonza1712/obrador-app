@@ -4,7 +4,7 @@ import { useTransition, useState, useId, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import {
     ArrowLeft, Plus, Trash2, Save, CheckCircle, Loader2, AlertCircle, ExternalLink,
-    Building2, ChevronsUpDown, Check,
+    Building2, ChevronsUpDown, Check, Link2, Search, ChevronDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -15,9 +15,11 @@ import ReconciliationPanel from '@/components/documents/ReconciliationPanel'
 import {
     saveDocument, approveDocumentStatus,
     reassignDocumentVenue, getVenues, getProviders,
+    getMasterItems, linkSkippedLine,
 } from '../_actions'
 import type { DocumentDetail, PurchaseLine } from './page'
-import type { Venue, Provider } from '../_actions'
+import type { Venue, Provider, MasterItemOption } from '../_actions'
+import { FORMATOS_COMPRA, BASE_UNITS, PRODUCT_CATEGORIES } from '@/lib/constants'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -194,6 +196,232 @@ function VenueCombobox({
     )
 }
 
+// ── SkippedLineEditor ─────────────────────────────────────────────────────────
+
+function SkippedLineEditor({
+    line,
+    doc,
+    onSaved,
+}: {
+    line: PurchaseLine
+    doc: DocumentDetail
+    onSaved: () => void
+}) {
+    const [isOpen, setIsOpen] = useState(false)
+    const [isPending, startTransition] = useTransition()
+    const [masterItems, setMasterItems] = useState<MasterItemOption[]>([])
+    const [loadingItems, setLoadingItems] = useState(false)
+    const [selectedId, setSelectedId] = useState<string | null>(null)
+    const [newItemName, setNewItemName] = useState('')
+    const [newItemCategory, setNewItemCategory] = useState('')
+    const [newItemBaseUnit, setNewItemBaseUnit] = useState('ud')
+    const [query, setQuery] = useState('')
+    const [comboOpen, setComboOpen] = useState(false)
+    const [formatoCompra, setFormatoCompra] = useState('Unidad')
+    const [envasesPorFormato, setEnvasesPorFormato] = useState(1)
+    const [contenidoPorEnvase, setContenidoPorEnvase] = useState(1)
+    const [error, setError] = useState<string | null>(null)
+    const containerRef = useRef<HTMLDivElement>(null)
+    const inputRef = useRef<HTMLInputElement>(null)
+
+    // Load master items lazily when the editor opens
+    useEffect(() => {
+        if (!isOpen || masterItems.length > 0) return
+        setLoadingItems(true)
+        getMasterItems().then((items) => {
+            setMasterItems(items)
+            setLoadingItems(false)
+        })
+    }, [isOpen]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Close combobox on outside click
+    useEffect(() => {
+        function handle(e: MouseEvent) {
+            if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+                setComboOpen(false)
+            }
+        }
+        document.addEventListener('mousedown', handle)
+        return () => document.removeEventListener('mousedown', handle)
+    }, [])
+
+    const filtered = masterItems.filter((item) =>
+        item.official_name.toLowerCase().includes(query.toLowerCase())
+    )
+
+    const displayValue =
+        selectedId === '__new__'
+            ? `➕ Crear: "${newItemName}"`
+            : selectedId
+                ? masterItems.find((i) => i.id === selectedId)?.official_name ?? ''
+                : ''
+
+    function handleSave() {
+        if (!selectedId) {
+            setError('Selecciona o crea un producto maestro.')
+            return
+        }
+        setError(null)
+
+        const resolution =
+            selectedId === '__new__'
+                ? { action: 'create_and_link' as const, officialName: newItemName, category: newItemCategory || null, baseUnit: newItemBaseUnit }
+                : { action: 'link_existing' as const, masterItemId: selectedId }
+
+        startTransition(async () => {
+            const result = await linkSkippedLine({
+                lineId: line.id,
+                documentId: doc.id,
+                providerId: doc.provider_id,
+                venueId: doc.venue_id,
+                documentDate: doc.document_date,
+                docType: doc.doc_type,
+                unitPrice: line.unit_price,
+                resolution,
+                alias: {
+                    rawName: line.raw_name ?? '',
+                    formatoCompra,
+                    envasesPorFormato,
+                    contenidoPorEnvase,
+                },
+            })
+            if (result.success) {
+                setIsOpen(false)
+                onSaved()
+            } else {
+                setError(result.error)
+            }
+        })
+    }
+
+    if (!isOpen) {
+        return (
+            <button
+                onClick={() => setIsOpen(true)}
+                className="flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 transition-colors dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800"
+            >
+                <Link2 className="h-3 w-3" />
+                Vincular
+            </button>
+        )
+    }
+
+    return (
+        <div className="mt-2 rounded-md border border-amber-200 bg-amber-50/60 p-3 space-y-3 dark:bg-amber-950/20 dark:border-amber-900">
+            {/* Master item combobox */}
+            <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Producto maestro</label>
+                {loadingItems ? (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Cargando...</div>
+                ) : (
+                    <div ref={containerRef} className="relative">
+                        <button
+                            type="button"
+                            onClick={() => { setComboOpen((o) => !o); setTimeout(() => inputRef.current?.focus(), 50) }}
+                            className={`flex w-full items-center justify-between rounded-md border px-3 py-1.5 text-sm transition-colors ${selectedId ? selectedId === '__new__' ? 'border-blue-400 bg-blue-50 text-blue-800' : 'border-green-400 bg-green-50 text-green-800' : 'border-input bg-background text-muted-foreground'}`}
+                        >
+                            <span className="truncate">{displayValue || 'Buscar o crear producto...'}</span>
+                            <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-60" />
+                        </button>
+                        {comboOpen && (
+                            <div className="absolute left-0 top-full z-50 mt-1 w-full overflow-hidden rounded-md border border-border bg-popover shadow-lg">
+                                <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+                                    <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                    <input ref={inputRef} type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar..." className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" />
+                                </div>
+                                <ul className="max-h-48 overflow-y-auto py-1">
+                                    {filtered.map((item) => (
+                                        <li key={item.id}>
+                                            <button type="button" onClick={() => { setSelectedId(item.id); setQuery(''); setComboOpen(false) }}
+                                                className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-accent ${selectedId === item.id ? 'bg-accent font-medium' : ''}`}>
+                                                <span>{item.official_name}</span>
+                                                <span className="text-xs text-muted-foreground">{item.base_unit}</span>
+                                            </button>
+                                        </li>
+                                    ))}
+                                    {query.trim() && (
+                                        <li className="border-t border-border">
+                                            <button type="button" onClick={() => { setSelectedId('__new__'); setNewItemName(query.trim()); setQuery(''); setComboOpen(false) }}
+                                                className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-blue-600 hover:bg-blue-50">
+                                                <Plus className="h-4 w-4 shrink-0" />
+                                                Crear: &quot;{query.trim()}&quot;
+                                            </button>
+                                        </li>
+                                    )}
+                                    {filtered.length === 0 && !query.trim() && (
+                                        <li className="px-3 py-4 text-center text-sm text-muted-foreground">Escribe para buscar...</li>
+                                    )}
+                                </ul>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {/* New item fields */}
+            {selectedId === '__new__' && (
+                <div className="grid grid-cols-3 gap-2 rounded-md border border-blue-100 bg-blue-50/50 p-2">
+                    <div className="col-span-3">
+                        <label className="text-[10px] font-semibold uppercase text-blue-600/70">Nombre</label>
+                        <input type="text" value={newItemName} onChange={(e) => setNewItemName(e.target.value)}
+                            className="mt-0.5 block w-full rounded border border-blue-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-semibold uppercase text-blue-600/70">Categoría</label>
+                        <select value={newItemCategory} onChange={(e) => setNewItemCategory(e.target.value)}
+                            className="mt-0.5 block w-full rounded border border-blue-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
+                            <option value="">— Seleccionar —</option>
+                            {PRODUCT_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-semibold uppercase text-blue-600/70">Unidad base</label>
+                        <select value={newItemBaseUnit} onChange={(e) => setNewItemBaseUnit(e.target.value)}
+                            className="mt-0.5 block w-full rounded border border-blue-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
+                            {BASE_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+                        </select>
+                    </div>
+                </div>
+            )}
+
+            {/* Packaging fields */}
+            <div className="grid grid-cols-3 gap-2">
+                <div>
+                    <label className="mb-0.5 block text-[10px] font-medium text-muted-foreground uppercase">Formato de compra</label>
+                    <select value={formatoCompra} onChange={(e) => setFormatoCompra(e.target.value)}
+                        className="w-full rounded border border-input bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring">
+                        {FORMATOS_COMPRA.map((f) => <option key={f} value={f}>{f}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label className="mb-0.5 block text-[10px] font-medium text-muted-foreground uppercase">Envases/formato</label>
+                    <input type="number" min="0" step="any" value={envasesPorFormato}
+                        onChange={(e) => setEnvasesPorFormato(Number(e.target.value) || 1)}
+                        className="w-full rounded border border-input bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring" />
+                </div>
+                <div>
+                    <label className="mb-0.5 block text-[10px] font-medium text-muted-foreground uppercase">Contenido/envase</label>
+                    <input type="number" min="0" step="any" value={contenidoPorEnvase}
+                        onChange={(e) => setContenidoPorEnvase(Number(e.target.value) || 1)}
+                        className="w-full rounded border border-input bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring" />
+                </div>
+            </div>
+
+            {error && <p className="text-xs text-red-600">{error}</p>}
+
+            <div className="flex items-center gap-2">
+                <Button size="sm" onClick={handleSave} disabled={isPending || !selectedId}>
+                    {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}
+                    Guardar vinculación
+                </Button>
+                <button onClick={() => setIsOpen(false)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+                    Cancelar
+                </button>
+            </div>
+        </div>
+    )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) {
@@ -241,6 +469,9 @@ export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) 
             unit_price: null,
             line_total_cost: 0,
             master_item_id: null,
+            review_status: null,
+            iva_percent: null,
+            ai_interpretation: null,
         }
         setLines((prev) => [...prev, newLine])
         markDirty()
@@ -286,6 +517,7 @@ export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) 
                 document_date: documentDate || null,
                 total_amount: parsedAmount,
                 provider_id: providerId,
+                venue_id: doc.venue_id ?? null,
             },
             lines: lines.map((l) => ({
                 id: l.id || undefined,
@@ -293,6 +525,8 @@ export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) 
                 quantity: l.quantity ?? 0,
                 unit_price: l.unit_price,
                 line_total_cost: l.line_total_cost ?? 0,
+                master_item_id: l.master_item_id ?? null,
+                ai_interpretation: l.ai_interpretation ?? null,
             })),
             deletedLineIds,
         }
@@ -566,17 +800,39 @@ export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) 
                             <tbody>
                                 {lines.map((line, index) => {
                                     const lineKey = line.id || line._tempId || index
+                                    const isSkipped = line.review_status === 'skipped'
                                     return (
-                                        <tr key={lineKey} className="border-b border-border last:border-0">
+                                        <tr key={lineKey} className={`border-b border-border last:border-0 ${isSkipped ? 'bg-amber-50/40 dark:bg-amber-950/10' : ''}`}>
                                             <td className="px-4 py-2">
-                                                <input
-                                                    type="text"
-                                                    value={line.raw_name ?? ''}
-                                                    onChange={(e) => handleLineChange(index, 'raw_name', e.target.value)}
-                                                    aria-label="Nombre del producto"
-                                                    className="w-full min-w-[180px] rounded border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                                                    placeholder="Nombre del producto"
-                                                />
+                                                <div className="space-y-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <input
+                                                            type="text"
+                                                            value={line.raw_name ?? ''}
+                                                            onChange={(e) => handleLineChange(index, 'raw_name', e.target.value)}
+                                                            aria-label="Nombre del producto"
+                                                            className="w-full min-w-[180px] rounded border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                                                            placeholder="Nombre del producto"
+                                                        />
+                                                        {isSkipped && (
+                                                            <Badge variant="outline" className="shrink-0 text-xs border-amber-300 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                                                                Pendiente de vincular
+                                                            </Badge>
+                                                        )}
+                                                    </div>
+                                                    {isSkipped && line.id && (
+                                                        <SkippedLineEditor
+                                                            line={line}
+                                                            doc={doc}
+                                                            onSaved={() => {
+                                                                // Optimistically update review_status in local state
+                                                                setLines((prev) => prev.map((l, i) =>
+                                                                    i === index ? { ...l, review_status: 'reviewed' } : l
+                                                                ))
+                                                            }}
+                                                        />
+                                                    )}
+                                                </div>
                                             </td>
                                             <td className="px-4 py-2">
                                                 <input

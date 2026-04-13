@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "type": "http",
+      "url": "https://mcp.supabase.com/mcp?project_ref=anszcyixjopxnskpxewg"
+    },
+    "n8n": {
+      "type": "http",
+      "url": "https://n8n.wescaleops.com/mcp-server/http"
+    },
+    "notion": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@notionhq/notion-mcp-server"],
+      "env": {
+        "OPENAPI_MCP_HEADERS": "{\"Authorization\": \"Bearer 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\", \"Notion-Version\": \"2022-06-28\"}"
+      }
+    }
+  }
+}

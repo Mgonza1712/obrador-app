@@ -10,6 +10,9 @@ export type PurchaseLine = {
     unit_price: number | null
     line_total_cost: number | null
     master_item_id: string | null
+    review_status: string | null
+    iva_percent: number | null
+    ai_interpretation: Record<string, unknown> | null
 }
 
 export type LinkedAlbaran = {
@@ -60,7 +63,7 @@ export default async function DocumentoDetailPage({
             .single(),
         supabase
             .from('erp_purchase_lines')
-            .select('id, raw_name, quantity, unit_price, line_total_cost, master_item_id')
+            .select('id, raw_name, quantity, unit_price, line_total_cost, master_item_id, review_status, iva_percent, ai_interpretation')
             .eq('document_id', id)
             .order('id'),
         sb
@@ -84,6 +87,20 @@ export default async function DocumentoDetailPage({
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const raw = docResult.data as any
+
+    // ── #18: Signed URL para archivos del bucket privado "facturas" ──
+    // drive_url puede ser:
+    //   a) path de Storage (ej: "AgADlgYAArqJqUY_archivo.pdf") → generar signed URL de 1h
+    //   b) URL externa (Google Drive, etc.) → usar tal cual
+    // Si el path no existe en Storage, resolvedDriveUrl queda null y el botón no aparece.
+    let resolvedDriveUrl: string | null = raw.drive_url ?? null
+    if (resolvedDriveUrl && !resolvedDriveUrl.startsWith('http')) {
+        const { data: signedData } = await supabase.storage
+            .from('facturas')
+            .createSignedUrl(resolvedDriveUrl, 3600)
+        resolvedDriveUrl = signedData?.signedUrl ?? null
+    }
+
     const doc: DocumentDetail = {
         id: raw.id,
         doc_type: raw.doc_type,
@@ -95,7 +112,7 @@ export default async function DocumentoDetailPage({
         reconciliation_delta: raw.reconciliation_delta,
         referenced_delivery_notes: raw.referenced_delivery_notes,
         parent_invoice_id: raw.parent_invoice_id,
-        drive_url: raw.drive_url,
+        drive_url: resolvedDriveUrl,
         provider_id: raw.provider_id,
         provider_name: raw.erp_providers?.name ?? null,
         venue_id: raw.venue_id,
@@ -109,6 +126,9 @@ export default async function DocumentoDetailPage({
             unit_price: l.unit_price,
             line_total_cost: l.line_total_cost,
             master_item_id: l.master_item_id,
+            review_status: l.review_status,
+            iva_percent: l.iva_percent,
+            ai_interpretation: l.ai_interpretation,
         })),
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         linkedAlbaranes: (albaranesResult.data ?? []).map((a: any) => ({

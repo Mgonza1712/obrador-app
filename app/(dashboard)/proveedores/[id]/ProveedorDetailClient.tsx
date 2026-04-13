@@ -41,6 +41,7 @@ export default function ProveedorDetailClient({ provider }: { provider: Proveedo
         notes: provider.notes ?? '',
         shared_pricing: provider.shared_pricing ?? false,
         is_active: provider.is_active ?? true,
+        price_confidence_threshold: String(provider.price_confidence_threshold ?? 0.90),
     })
     const [saved, setSaved] = useState(false)
     const [error, setError] = useState('')
@@ -55,6 +56,13 @@ export default function ProveedorDetailClient({ provider }: { provider: Proveedo
         e.preventDefault()
         setError('')
         setSaved(false)
+
+        const threshold = parseFloat(form.price_confidence_threshold)
+        if (isNaN(threshold) || threshold < 0 || threshold > 1) {
+            setError('El umbral debe estar entre 0.00 y 1.00.')
+            return
+        }
+
         startTransition(async () => {
             try {
                 await updateProvider(provider.id, {
@@ -66,6 +74,7 @@ export default function ProveedorDetailClient({ provider }: { provider: Proveedo
                     notes: form.notes || null,
                     shared_pricing: form.shared_pricing,
                     is_active: form.is_active,
+                    price_confidence_threshold: threshold,
                 })
                 setSaved(true)
             } catch (err) {
@@ -186,6 +195,49 @@ export default function ProveedorDetailClient({ provider }: { provider: Proveedo
                             checked={form.is_active}
                             onChange={(v) => set('is_active', v)}
                         />
+                    </div>
+                </div>
+
+                {/* Separator — Configuración de extracción */}
+                <div className="border-t border-border pt-4 mt-2">
+                    <p className="text-sm text-muted-foreground font-medium mb-4">
+                        Configuración de extracción
+                    </p>
+
+                    {/* Umbral de auto-aprobación */}
+                    <div className="grid gap-1.5 mb-4">
+                        <label className="text-sm font-medium">
+                            Umbral de auto-aprobación de precio
+                        </label>
+                        <input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={form.price_confidence_threshold}
+                            onChange={(e) => set('price_confidence_threshold', e.target.value)}
+                            className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring w-32"
+                        />
+                        <p className="text-xs text-muted-foreground max-w-prose">
+                            El sistema auto-aprueba líneas cuya confianza de precio supere este umbral.
+                            El valor estándar es 0.90. Proveedores con precios variables (descuentos,
+                            rappels) pueden usar 0.75 una vez que hayan demostrado fiabilidad.
+                        </p>
+                    </div>
+
+                    {/* Aprobaciones consecutivas — solo lectura */}
+                    <div className="grid gap-1.5">
+                        <label className="text-sm font-medium flex items-center gap-1.5">
+                            Aprobaciones consecutivas sin corrección de precio
+                            <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                        </label>
+                        <p className="text-2xl font-semibold tabular-nums">
+                            {provider.consecutive_clean_approvals ?? 0}
+                        </p>
+                        <p className="text-xs text-muted-foreground max-w-prose">
+                            El sistema puede bajar el umbral automáticamente cuando este contador
+                            sea suficientemente alto. Por ahora este ajuste es manual.
+                        </p>
                     </div>
                 </div>
 

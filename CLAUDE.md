@@ -76,11 +76,22 @@ npx supabase gen types typescript --project-id anszcyixjopxnskpxewg --schema pub
 ## 4. Database Schema
 
 ### Multi-tenancy & RLS
-RLS habilitado en todas las tablas de negocio. Datos filtrados por `tenant_id`. Server Actions usan `createClient` de `lib/supabase/server.ts`.
+
+RLS está habilitado en las tablas core del ERP (principalmente `erp_*`) y aísla datos por `tenant_id` (directo o vía joins).
+
+**Excepciones verificadas (sin RLS al 2026-04-09):**
+
+- `erp_channel_accounts` (resolución de `tenant_id` desde canales; usado por n8n)
+- `extraction_logs` (telemetría del extractor)
+- `extraction_corrections` (dataset de correcciones humanas)
+
+Server Actions usan `createClient` de `lib/supabase/server.ts`.
 
 ### Dominio: Compras & Catálogo
 ```
 erp_documents        — Cabeceras. total_amount = total CON IVA del documento
+                      Soporta conciliación factura-resumen ↔ albaranes (parent_invoice_id,
+                      referenced_delivery_notes, reconciliation_status, reconciliation_delta)
 erp_purchase_lines   — Líneas. unit_price = precio unitario SIN IVA, iva_percent por línea
 erp_master_items     — Catálogo. base_unit: 'ml'|'g'|'ud'
                        Categorías: 'Cervezas', 'Vinos y Licores', 'Refrescos y Agua',
@@ -93,7 +104,7 @@ erp_item_aliases     — Diccionario nombre/formato por proveedor
                        Campos: raw_name, provider_id, master_item_id,
                        formato_compra, envases_por_formato, contenido_por_envase
 erp_price_history    — Historial precios. unit_price = SIN IVA, iva_percent guardado
-                       status: 'active'|'archived'|'quote'|'inactive'
+                       status: 'active'|'archived'|'quote'|'inactive'|'disputed'
 erp_providers        — channel: 'email'|'whatsapp'|'telegram'|'telefono'
 extraction_logs      — Metadata de cada extracción
 extraction_corrections — Correcciones humanas (dataset para mejora iterativa)
@@ -134,11 +145,17 @@ Costes calculados en erp_price_history:
 ## 6. Flujo de auto-aprobación (función SQL v4)
 
 ```
-alias_match=true + confidence_precio ≥ 0.90 → auto_approved
-alias_match=true + confidence_precio < 0.90 → pending_review (low_price_confidence)
+alias_match=true + confidence_precio ≥ provider.price_confidence_threshold (default 0.90) → auto_approved
+alias_match=true + confidence_precio < provider.price_confidence_threshold             → pending_review (low_price_confidence)
 alias_match=true + albarán sin precio       → auto_approved
 alias_match=false (producto nuevo)           → pending_review (new_product)
 ```
+
+Notas:
+
+- El threshold es dinámico por proveedor (`erp_providers.price_confidence_threshold`).
+- Envases retornables (`is_envase_retornable=true`) se auto-aprueban y no deben generar catálogo ni price_history.
+- Existe una rama de **Factura Resumen** en SQL v4: si no hay `items` pero sí `albaranes_vinculados`, intenta auto-conciliar y vincular albaranes (`parent_invoice_id`).
 
 Si TODAS las líneas auto_approved → documento status='approved' (no va a revisión).
 Si alguna pending_review → documento status='pending' (va a /admin/revision).
@@ -149,6 +166,7 @@ El Server Action `approveDocument` se encarga de:
 - Crear `erp_master_items` nuevos (solo para new_product)
 - Crear `erp_item_aliases` nuevos
 - Insertar/actualizar `erp_price_history` para líneas reviewed
+- En `Presupuesto`, respetar el toggle `activate_prices` (crear `price_history` como `quote` vs `active`)
 - Si el operario cambió el precio de una línea auto_approved → actualizar price_history + registrar extraction_correction
 - Marcar documento como 'approved'
 
@@ -191,3 +209,37 @@ app/(dashboard)/admin/revision/      — Revisión humana de documentos pendient
 
 ## 13. Actualización de este archivo
 Actualizar al final de cada sesión importante. Claude.ai genera el contenido, Claude Code lo aplica, GitHub Desktop hace commit `docs: update CLAUDE.md — [fecha]`.
+
+## 14. Sistema de documentación del repo
+
+`CLAUDE.md` sigue siendo el documento principal de reglas e invariantes. La documentación complementaria vive en:
+
+- `AGENTS.md` — flujo compartido para agentes
+- `docs/architecture.md` — mapa del sistema
+- `docs/domain/` — reglas de negocio por dominio
+- `docs/integrations/` — Supabase y pipeline externo
+- `docs/runbooks/` — operación y despliegue
+- `docs/changes/` — especificaciones de cambios
+- `docs/decisions/` — decisiones duraderas
+- `docs/handoffs/` — estado temporal de trabajo
+
+### Cuándo leer qué
+
+Antes de empezar cualquier tarea, identifica el área afectada y lee la doc canónica correspondiente:
+
+- Cambios en lógica de negocio (precios, IVA, aprobación, escandallos) → `docs/domain/`
+- Cambios en integraciones (Supabase, n8n, extractor) → `docs/integrations/`
+- Si existe un archivo activo en `docs/changes/` → leerlo siempre antes de implementar
+- Si existe un archivo en `docs/handoffs/` → leerlo para retomar trabajo previo
+
+### Reglas operativas
+
+- Antes de cambiar código, identifica qué documento es canónico para el área afectada y léelo.
+- Si cambias una regla de negocio, arquitectura o integración, actualiza la doc canónica correspondiente en el mismo trabajo.
+- Si un cambio es grande o ambiguo, crea o actualiza un archivo en `docs/changes/`.
+- Si dejas trabajo a medias, crea un handoff corto en `docs/handoffs/`.
+
+### MCPs disponibles
+
+- **Supabase MCP** — úsalo para verificar tablas, funciones, tipos y relaciones reales antes de implementar o documentar algo relacionado con la base de datos. No asumas el schema: verifícalo.
+- **Notion MCP** — úsalo para recuperar contexto histórico y decisiones pasadas. No trates Notion como fuente canónica final: migra lo relevante al repo.

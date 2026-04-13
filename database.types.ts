@@ -1,3 +1,4 @@
+npm warn exec The following package was not found and will be installed: supabase@2.89.1
 export type Json =
   | string
   | number
@@ -382,16 +383,19 @@ export type Database = {
           id: number
           message: Json
           session_id: string
+          tenant_id: string | null
         }
         Insert: {
           id?: number
           message: Json
           session_id: string
+          tenant_id?: string | null
         }
         Update: {
           id?: number
           message?: Json
           session_id?: string
+          tenant_id?: string | null
         }
         Relationships: []
       }
@@ -572,6 +576,8 @@ export type Database = {
         Row: {
           cost_per_base_unit: number | null
           cost_per_packaged_unit: number | null
+          created_at: string
+          document_id: string | null
           effective_date: string | null
           id: string
           is_preferred: boolean
@@ -585,6 +591,8 @@ export type Database = {
         Insert: {
           cost_per_base_unit?: number | null
           cost_per_packaged_unit?: number | null
+          created_at?: string
+          document_id?: string | null
           effective_date?: string | null
           id?: string
           is_preferred?: boolean
@@ -598,6 +606,8 @@ export type Database = {
         Update: {
           cost_per_base_unit?: number | null
           cost_per_packaged_unit?: number | null
+          created_at?: string
+          document_id?: string | null
           effective_date?: string | null
           id?: string
           is_preferred?: boolean
@@ -609,6 +619,13 @@ export type Database = {
           venue_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "erp_price_history_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "erp_documents"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "erp_price_history_master_item_id_fkey"
             columns: ["master_item_id"]
@@ -642,6 +659,7 @@ export type Database = {
       erp_providers: {
         Row: {
           channel: string | null
+          consecutive_clean_approvals: number
           contact_name: string | null
           created_at: string | null
           email: string | null
@@ -651,11 +669,13 @@ export type Database = {
           name: string
           notes: string | null
           phone: string | null
+          price_confidence_threshold: number
           shared_pricing: boolean
           tenant_id: string | null
         }
         Insert: {
           channel?: string | null
+          consecutive_clean_approvals?: number
           contact_name?: string | null
           created_at?: string | null
           email?: string | null
@@ -665,11 +685,13 @@ export type Database = {
           name: string
           notes?: string | null
           phone?: string | null
+          price_confidence_threshold?: number
           shared_pricing?: boolean
           tenant_id?: string | null
         }
         Update: {
           channel?: string | null
+          consecutive_clean_approvals?: number
           contact_name?: string | null
           created_at?: string | null
           email?: string | null
@@ -679,6 +701,7 @@ export type Database = {
           name?: string
           notes?: string | null
           phone?: string | null
+          price_confidence_threshold?: number
           shared_pricing?: boolean
           tenant_id?: string | null
         }
@@ -704,6 +727,7 @@ export type Database = {
           ai_interpretation: Json | null
           document_id: string | null
           id: string
+          is_envase_retornable: boolean
           iva_percent: number | null
           line_total_cost: number
           master_item_id: string | null
@@ -716,6 +740,7 @@ export type Database = {
           ai_interpretation?: Json | null
           document_id?: string | null
           id?: string
+          is_envase_retornable?: boolean
           iva_percent?: number | null
           line_total_cost: number
           master_item_id?: string | null
@@ -728,6 +753,7 @@ export type Database = {
           ai_interpretation?: Json | null
           document_id?: string | null
           id?: string
+          is_envase_retornable?: boolean
           iva_percent?: number | null
           line_total_cost?: number
           master_item_id?: string | null

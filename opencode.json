@@ -1,0 +1,137 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openai/gpt-5.4",
+  "small_model": "openai/gpt-5.4",
+  "provider": {
+    "openai": {
+      "models": {
+        "gpt-5-docs": {
+          "id": "gpt-5.4",
+          "options": {
+            "reasoningEffort": "high",
+            "textVerbosity": "low",
+            "reasoningSummary": "auto"
+          }
+        }
+      }
+    }
+  },
+  "instructions": [
+    "./README.md",
+    "./CLAUDE.md",
+    "./AGENTS.md"
+  ],
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 12000
+  },
+  "watcher": {
+    "ignore": [
+      ".git/**",
+      ".next/**",
+      "node_modules/**",
+      "coverage/**"
+    ]
+  },
+  "mcp": {
+    "supabase": {
+      "type": "remote",
+      "url": "https://mcp.supabase.com/mcp?project_ref=anszcyixjopxnskpxewg&read_only=true&features=database,docs,development",
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:SUPABASE_ACCESS_TOKEN}"
+      },
+      "enabled": true
+    },
+    "notion": {
+      "type": "remote",
+      "url": "https://mcp.notion.com/mcp",
+      "enabled": true
+    },
+    "n8n": {
+      "type": "remote",
+      "url": "{env:N8N_MCP_URL}",
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:N8N_MCP_TOKEN}"
+      },
+      "enabled": true
+    }
+  },
+  "permission": {
+    "supabase_*": "deny",
+    "notion_*": "deny",
+    "n8n_*": "deny",
+    "skill": {
+      "documentation-system": "allow",
+      "supabase": "allow",
+      "supabase-postgres-best-practices": "allow",
+      "vercel-react-best-practices": "allow",
+      "web-design-guidelines": "allow"
+    }
+  },
+  "agent": {
+    "docs": {
+      "description": "Creates and maintains repository documentation using repo files plus MCP context",
+      "mode": "primary",
+      "model": "openai/gpt-5-docs",
+      "permission": {
+        "edit": "allow",
+        "bash": "ask",
+        "webfetch": "allow",
+        "supabase_*": "allow",
+        "notion_*": "allow",
+        "n8n_*": "allow"
+      },
+      "skill": {
+        "documentation-system": "allow"
+      }
+    },
+    "systems-review": {
+      "description": "Reviews cross-system compatibility across obrador-app, Supabase, n8n, and the extractor. Detects drift, incompatible contracts, schema mismatches, missing constraints or RLS, and end-to-end impact before implementation.",
+      "mode": "subagent",
+      "model": "openai/gpt-5.4",
+      "permission": {
+        "edit": "deny",
+        "bash": "ask",
+        "webfetch": "allow",
+        "supabase_*": "allow",
+        "notion_*": "allow",
+        "n8n_*": "allow"
+      },
+      "skill": {
+        "supabase": "allow",
+        "supabase-postgres-best-practices": "allow"
+      }
+    },
+    "supabase-specialist": {
+      "description": "Specialist for Supabase schema, RLS, policies, constraints, SQL functions, and app-facing database contracts. Reviews impact before changes and can prepare repository updates for database-related work.",
+      "mode": "subagent",
+      "model": "openai/gpt-5.4",
+      "permission": {
+        "edit": "allow",
+        "bash": "ask",
+        "webfetch": "allow",
+        "supabase_*": "allow"
+      },
+      "skill": {
+        "supabase": "allow",
+        "supabase-postgres-best-practices": "allow"
+      }
+    },
+    "business-impact": {
+      "description": "Translates technical findings into business impact, operational risk, UX implications, and product decisions. Helps clarify ambiguous business rules, prioritizes fixes by user impact, and identifies where the product contract is still undefined.",
+      "mode": "subagent",
+      "model": "openai/gpt-5.4",
+      "permission": {
+        "edit": "deny",
+        "bash": "ask",
+        "webfetch": "allow",
+        "supabase_*": "allow",
+        "notion_*": "allow",
+        "n8n_*": "allow"
+      }
+    }
+  }
+}

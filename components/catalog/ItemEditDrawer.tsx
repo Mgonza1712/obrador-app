@@ -15,7 +15,6 @@ export type AliasEdit = {
     envases_por_formato: number
     contenido_por_envase: number
     formato_compra: string
-    conversion_multiplier: number
 }
 
 export type ItemEditData = {
@@ -86,12 +85,7 @@ export default function ItemEditDrawer({ itemId, onClose, onSaved }: ItemEditDra
         setAliases((prev) =>
             prev.map((a, i) => {
                 if (i !== index) return a
-                const updated = { ...a, [field]: value }
-                // Recalculate conversion_multiplier
-                const pack = field === 'envases_por_formato' ? (value as number) : a.envases_por_formato
-                const qty = field === 'contenido_por_envase' ? (value as number) : a.contenido_por_envase
-                updated.conversion_multiplier = pack * qty
-                return updated
+                return { ...a, [field]: value }
             }),
         )
         markDirty()
@@ -112,7 +106,6 @@ export default function ItemEditDrawer({ itemId, onClose, onSaved }: ItemEditDra
                     envases_por_formato: a.envases_por_formato,
                     contenido_por_envase: a.contenido_por_envase,
                     formato_compra: a.formato_compra,
-                    conversion_multiplier: a.conversion_multiplier,
                 })),
             })
 
@@ -295,7 +288,6 @@ export default function ItemEditDrawer({ itemId, onClose, onSaved }: ItemEditDra
 
                                                     <div>
                                                         <label
-                                                            htmlFor={`${uid}-alias-${alias.id}-conv`}
                                                             className="mb-1 block text-xs font-medium text-muted-foreground"
                                                         >
                                                             Multiplicador{' '}
@@ -304,9 +296,8 @@ export default function ItemEditDrawer({ itemId, onClose, onSaved }: ItemEditDra
                                                             </span>
                                                         </label>
                                                         <input
-                                                            id={`${uid}-alias-${alias.id}-conv`}
                                                             type="number"
-                                                            value={alias.conversion_multiplier}
+                                                            value={alias.envases_por_formato * alias.contenido_por_envase}
                                                             readOnly
                                                             aria-readonly="true"
                                                             className="w-full rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground cursor-not-allowed"

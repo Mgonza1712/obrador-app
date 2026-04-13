@@ -27,6 +27,7 @@ export async function updateProvider(
         notes: string | null
         shared_pricing: boolean
         is_active: boolean
+        price_confidence_threshold: number
     },
 ) {
     const supabase = await createClient()
