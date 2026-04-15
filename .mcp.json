@@ -6,7 +6,10 @@
     },
     "n8n": {
       "type": "http",
-      "url": "https://n8n.wescaleops.com/mcp-server/http"
+      "url": "https://n8n.wescaleops.com/mcp-server/http",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkYTQ4ZjUyMi1iNzljLTQ4OTMtYmIwMS1iMjAyNWNjZmRmM2UiLCJpc3MiOiJuOG4iLCJhdWQiOiJtY3Atc2VydmVyLWFwaSIsImp0aSI6ImNiYmVjOWZhLTcwMjAtNGZhYS1hZjVhLWJhNjI5ZmMxNmNjMSIsImlhdCI6MTc3NjE2NjMzM30.zfu-ctilHByKokIUHP6tjdw5fkPFtT5BA6JDD-5cN5M"
+      }
     },
     "notion": {
       "type": "stdio",

@@ -16,7 +16,7 @@ Este documento es el contrato *entre sistemas*. La semántica de negocio (precio
   - tablas `erp_*`, `extraction_*`, `erp_channel_accounts`
   - vista `vw_catalogo_precios`
 
-Fecha de verificación: 2026-04-09.
+Fecha de verificación: 2026-04-09. Última actualización: 2026-04-14 (adapter movido al extractor).
 
 ## Workflows n8n (estado observado)
 
@@ -67,7 +67,13 @@ Verificado en `obrador-app`: `app/actions/documents.ts` genera Signed URL desde 
 
 ### 4) Adaptar el JSON del extractor al contrato de `procesar_factura_completa_v4`
 
-El adapter en n8n construye un payload con esta forma (claves canónicas; nombres exactos importan):
+**El extractor ya incluye el campo `sql_payload` en su respuesta.** El nodo n8n "Adapter Extractor → SQL v4" es ahora un pass-through:
+
+```javascript
+return [{ json: $json.sql_payload }];
+```
+
+El payload `sql_payload` lo construye `build_sql_payload()` en `pizca-server/services/extractor.py`. Su estructura (claves canónicas; nombres exactos importan):
 
 ```json
 {
@@ -98,11 +104,12 @@ El adapter en n8n construye un payload con esta forma (claves canónicas; nombre
       "envases_por_formato": 24,
       "contenido_por_envase": 330,
       "categoria": "...",
+      "is_existing_master": false,
+      "suggested_master_item_id": null,
       "modelo_llm": "...",
       "unidad_tal_como_aparece": "...",
       "needs_review": true,
-      "review_reasons": ["low_price_confidence|new_product"],
-      "prompt_version": "..."
+      "review_reasons": ["low_price_confidence|new_product"]
     }
   ]
 }
@@ -111,7 +118,9 @@ El adapter en n8n construye un payload con esta forma (claves canónicas; nombre
 Notas:
 
 - `precio_unitario` y `precio_linea` son **SIN IVA** (ver invariantes en `CLAUDE.md`).
+- `precio_linea` se calcula en el extractor: `round(cantidad_comprada × precio_unitario, 4)`.
 - La función SQL también recalcula costes derivados (`cost_per_base_unit`, etc.) usando envases/contenido.
+- La estructura canónica de `SqlPayload` vive en `pizca-server/pizca-extractor/models/schemas.py`.
 
 ### 5) Ejecutar función SQL v4 en Supabase
 

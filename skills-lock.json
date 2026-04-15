@@ -11,6 +11,26 @@
       "sourceType": "github",
       "computedHash": "063a0e6448123cd359ad0044cc46b0e490cc7964d45ef4bb9fd842bd2ffbca67"
     },
+    "n8n-code-javascript": {
+      "source": "czlonkowski/n8n-skills",
+      "sourceType": "github",
+      "computedHash": "e0b265f8a54726eb33fdd83f3e319e5d8e45393520f3d0ad26ff9f5979c41514"
+    },
+    "n8n-mcp-tools-expert": {
+      "source": "czlonkowski/n8n-skills",
+      "sourceType": "github",
+      "computedHash": "fca1e793db48798798377a84703a517e7062ecfdb49507abf119e4bb008d3994"
+    },
+    "n8n-node-configuration": {
+      "source": "czlonkowski/n8n-skills",
+      "sourceType": "github",
+      "computedHash": "31499d133a0e9cb0c09079d5b2ca9212626cc3463756c4b0239182cc4e43ed92"
+    },
+    "n8n-workflow-patterns": {
+      "source": "czlonkowski/n8n-skills",
+      "sourceType": "github",
+      "computedHash": "62de9e5fda2ac9f2967626dfc7caec7775ceb8e001371cebbf210c380383412f"
+    },
     "supabase": {
       "source": "supabase/agent-skills",
       "sourceType": "github",
