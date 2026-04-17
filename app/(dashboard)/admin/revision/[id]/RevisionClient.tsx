@@ -606,8 +606,20 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
         return acc + (state.quantity || 0) * (state.unit_price || 0)
     }, 0)
 
-    // D-2: IVA breakdown state (operator-entered footer amounts from the paper doc)
-    const [docIvaInputs, setDocIvaInputs] = useState<Record<string, string>>({ '4': '', '10': '', '21': '' })
+    // D-2: IVA breakdown state — pre-populated from extractor's iva_footer if available
+    const [docIvaInputs, setDocIvaInputs] = useState<Record<string, string>>(() => {
+        const base: Record<string, string> = { '4': '', '10': '', '21': '' }
+        const footer = doc.ai_interpretation?.iva_footer as Array<{ tipo_iva: number; cuota: number }> | undefined
+        if (Array.isArray(footer)) {
+            for (const entry of footer) {
+                const key = String(entry.tipo_iva)
+                if (key === '4' || key === '10' || key === '21') {
+                    base[key] = String(entry.cuota)
+                }
+            }
+        }
+        return base
+    })
 
     // D-2: Compute breakdown per IVA rate using current lineStates
     const ivaRates = [4, 10, 21]
