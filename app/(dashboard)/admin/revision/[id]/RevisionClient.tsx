@@ -633,7 +633,8 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
     const deltaDoc = (effectiveTotalForDelta ?? 0) - totalCalculado
 
     // Check if there is an accounting mismatch (tolerance $0.10 for the live banner)
-    const mismatchAmount = Math.abs(sumOfLines - docState.total_amount)
+    // totalCalculado ya suma base + IVA por línea (CON IVA), igual que total_amount
+    const mismatchAmount = Math.abs(totalCalculado - docState.total_amount)
     const isMismatch = docState.doc_type !== 'presupuesto' && mismatchAmount > 0.10
     // Significant mismatch: >1% of total OR >€0.50 — triggers save confirmation modal
     const hasSignificantMismatch = docState.doc_type !== 'presupuesto' &&
@@ -903,12 +904,21 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                 <p className="text-sm text-muted-foreground animate-pulse">Cargando documento seguro...</p>
                             </div>
                         ) : secureUrl ? (
-                            <iframe
-                                src={secureUrl}
-                                title="Documento PDF"
-                                className="w-full h-full border-0"
-                                allow="autoplay"
-                            />
+                            /\.(jpe?g|png|webp)$/i.test(doc.drive_url ?? '') ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                    src={secureUrl}
+                                    alt="Documento escaneado"
+                                    className="w-full h-full object-contain"
+                                />
+                            ) : (
+                                <iframe
+                                    src={secureUrl}
+                                    title="Documento PDF"
+                                    className="w-full h-full border-0"
+                                    allow="autoplay"
+                                />
+                            )
                         ) : (
                             <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-8">
                                 <FileText className="h-12 w-12 text-muted-foreground/30" />
@@ -2092,12 +2102,12 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                     <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-sm leading-tight">
                         <span className="font-semibold text-orange-800 dark:text-orange-200">Descuadre contable:</span>
                         <span className="text-orange-700 dark:text-orange-300">
-                            suma de líneas <strong>${sumOfLines.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                            total c/IVA calculado <strong>{totalCalculado.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}€</strong>
                             {' '}vs{' '}
-                            <strong>${docState.total_amount.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong> ingresado
+                            <strong>{docState.total_amount.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}€</strong> en documento
                         </span>
                         <span className="font-bold text-orange-500">
-                            (Δ ${Math.abs(sumOfLines - docState.total_amount).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                            (Δ {Math.abs(totalCalculado - docState.total_amount).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}€)
                         </span>
                     </div>
                 </div>

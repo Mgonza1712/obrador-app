@@ -4,7 +4,6 @@ import { Suspense, useState, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import {
   Camera,
@@ -15,7 +14,11 @@ import {
   Loader2,
   AlertTriangle,
   ChevronLeft,
+  Send,
 } from 'lucide-react';
+import { CameraCapture } from './components/CameraCapture';
+import { PerspectiveEditor } from './components/PerspectiveEditor';
+import { PagePreview, type CapturedPage } from './components/PagePreview';
 
 const WEBHOOK_URL = 'https://n8n.wescaleops.com/webhook/scanner-intake';
 
@@ -27,85 +30,152 @@ const LOCALES = [
 
 type LocalSlug = (typeof LOCALES)[number]['slug'];
 type SubmitStatus = 'idle' | 'submitting' | 'success' | 'error' | 'duplicate';
+type Step = 'select-local' | 'capture' | 'perspective' | 'review' | 'result';
 
-interface FilePreview {
-  base64: string;
-  filename: string;
-  mimeType: string;
-  sizeKb: number;
+function dataUrlToBase64(dataUrl: string): string {
+  return dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
 }
 
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      // Strip data URL prefix if present
-      const base64 = result.includes(',') ? result.split(',')[1] : result;
-      resolve(base64);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+/** Build a PDF from an array of image data URLs using jsPDF */
+async function buildPdf(pages: CapturedPage[]): Promise<string> {
+  const { jsPDF } = await import('jspdf');
+
+  // Get dimensions from first image
+  const getImgSize = (dataUrl: string): Promise<{ w: number; h: number }> =>
+    new Promise((res) => {
+      const img = new Image();
+      img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight });
+      img.src = dataUrl;
+    });
+
+  const firstSize = await getImgSize(pages[0].dataUrl);
+  const isLandscape = firstSize.w > firstSize.h;
+  const pdf = new jsPDF({
+    orientation: isLandscape ? 'landscape' : 'portrait',
+    unit: 'px',
+    format: [firstSize.w, firstSize.h],
+    compress: true,
   });
+
+  for (let i = 0; i < pages.length; i++) {
+    if (i > 0) {
+      const size = await getImgSize(pages[i].dataUrl);
+      pdf.addPage([size.w, size.h], size.w > size.h ? 'landscape' : 'portrait');
+    }
+    const size = await getImgSize(pages[i].dataUrl);
+    pdf.addImage(pages[i].dataUrl, 'JPEG', 0, 0, size.w, size.h);
+  }
+
+  return dataUrlToBase64(pdf.output('datauristring'));
 }
 
 function ScannerContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get('t') ?? '';
   const localParam = searchParams.get('local') as LocalSlug | null;
-  const lockedLocal = localParam && LOCALES.some(l => l.slug === localParam) ? localParam : null;
+  const lockedLocal = localParam && LOCALES.some((l) => l.slug === localParam) ? localParam : null;
 
   const [local, setLocal] = useState<LocalSlug | null>(lockedLocal);
-  const [preview, setPreview] = useState<FilePreview | null>(null);
-  const [status, setStatus] = useState<SubmitStatus>('idle');
+  const [step, setStep] = useState<Step>(lockedLocal ? 'capture' : 'select-local');
+
+  // Camera / perspective flow
+  const [capturedImageUrl, setCapturedImageUrl] = useState<string | null>(null);
+
+  // Pages accumulator
+  const [pages, setPages] = useState<CapturedPage[]>([]);
+
+  // PDF file flow (bypass camera)
+  const [pdfPreview, setPdfPreview] = useState<{ base64: string; filename: string; sizeKb: number } | null>(null);
+
+  // Submit state
+  const [submitStatus, setSubmitStatus] = useState<SubmitStatus>('idle');
   const [resultMessage, setResultMessage] = useState('');
   const [docId, setDocId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileSelect = useCallback(async (file: File) => {
+  // ─── Local selection ────────────────────────────────────────────────
+  const handleLocalSelect = (slug: LocalSlug) => {
+    setLocal(slug);
+    setStep('capture');
+  };
+
+  // ─── PDF upload (skip perspective) ──────────────────────────────────
+  const handlePdfSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     if (file.size > 20 * 1024 * 1024) {
-      alert('El archivo supera los 20 MB. Usa un archivo más pequeño.');
+      alert('El archivo supera los 20 MB.');
       return;
     }
-    const base64 = await fileToBase64(file);
-    setPreview({
-      base64,
-      filename: file.name,
-      mimeType: file.type,
-      sizeKb: Math.round(file.size / 1024),
-    });
-    setStatus('idle');
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.includes(',') ? result.split(',')[1] : result;
+      setPdfPreview({ base64, filename: file.name, sizeKb: Math.round(file.size / 1024) });
+      setStep('review');
+    };
+    reader.readAsDataURL(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   }, []);
 
-  const handleInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) handleFileSelect(file);
-    },
-    [handleFileSelect]
-  );
+  // ─── Camera capture → perspective editor ────────────────────────────
+  const handleCameraCapture = (dataUrl: string) => {
+    setCapturedImageUrl(dataUrl);
+    setStep('perspective');
+  };
 
+  // ─── Perspective confirmed → add to pages ───────────────────────────
+  const handlePerspectiveConfirm = (processedDataUrl: string) => {
+    setPages((prev) => [...prev, { dataUrl: processedDataUrl, index: prev.length }]);
+    setCapturedImageUrl(null);
+    setStep('review');
+  };
+
+  // ─── Remove page ─────────────────────────────────────────────────────
+  const handleRemovePage = (index: number) => {
+    setPages((prev) => prev.filter((_, i) => i !== index).map((p, i) => ({ ...p, index: i })));
+  };
+
+  // ─── Add another page ────────────────────────────────────────────────
+  const handleAddPage = () => {
+    setStep('capture');
+  };
+
+  // ─── Submit ──────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!preview || !local || !token) return;
+    if (!local || !token) return;
+    if (pages.length === 0 && !pdfPreview) return;
 
-    setStatus('submitting');
+    setSubmitStatus('submitting');
     setResultMessage('');
 
-    const isImage = preview.mimeType.startsWith('image/');
-    const filename = isImage
-      ? `scan_${Date.now()}.jpg`
-      : preview.filename || `scan_${Date.now()}.pdf`;
-
     try {
+      let base64: string;
+      let filename: string;
+      const isImage = false; // always send as PDF
+
+      if (pdfPreview) {
+        base64 = pdfPreview.base64;
+        filename = pdfPreview.filename;
+      } else {
+        filename = `scan_${Date.now()}.pdf`;
+        if (pages.length === 1) {
+          // Single page: convert image to single-page PDF
+          base64 = await buildPdf(pages);
+        } else {
+          // Multi-page: build PDF from all pages
+          base64 = await buildPdf(pages);
+        }
+      }
+
       const res = await fetch(`${WEBHOOK_URL}?t=${encodeURIComponent(token)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           t: token,
-          document_base64: preview.base64,
-          local: local,
+          document_base64: base64,
+          local,
           filename,
           is_image: isImage,
         }),
@@ -114,40 +184,44 @@ function ScannerContent() {
       const data = await res.json();
 
       if (!res.ok || data.ok === false) {
-        setStatus('error');
+        setSubmitStatus('error');
         setResultMessage(data.error || `Error ${res.status}`);
         return;
       }
 
       if (data.status === 'duplicate') {
-        setStatus('duplicate');
+        setSubmitStatus('duplicate');
         setResultMessage(data.message || 'Documento ya procesado anteriormente.');
         return;
       }
 
-      setStatus('success');
+      setSubmitStatus('success');
       setDocId(data.doc_id ?? null);
       setResultMessage(
         data.auto_approval
           ? 'Documento aprobado automáticamente.'
           : 'Documento enviado. Pendiente de revisión.'
       );
+      setStep('result');
     } catch {
-      setStatus('error');
+      setSubmitStatus('error');
       setResultMessage('No se pudo conectar. Verifica tu conexión e intenta de nuevo.');
     }
   };
 
+  // ─── Reset ───────────────────────────────────────────────────────────
   const handleReset = () => {
-    setPreview(null);
-    setStatus('idle');
+    setPages([]);
+    setPdfPreview(null);
+    setCapturedImageUrl(null);
+    setSubmitStatus('idle');
     setResultMessage('');
     setDocId(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-    if (cameraInputRef.current) cameraInputRef.current.value = '';
+    setStep(lockedLocal ? 'capture' : 'select-local');
+    if (!lockedLocal) setLocal(null);
   };
 
-  // No token → access denied
+  // ─── Guard: no token ─────────────────────────────────────────────────
   if (!token) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
@@ -156,8 +230,7 @@ function ScannerContent() {
             <XCircle className="h-12 w-12 text-destructive" />
             <p className="font-semibold text-lg">Enlace no válido</p>
             <p className="text-sm text-muted-foreground">
-              Este enlace no contiene un token de acceso. Solicita un enlace
-              válido al administrador.
+              Este enlace no contiene un token de acceso. Solicita un enlace válido al administrador.
             </p>
           </CardContent>
         </Card>
@@ -165,8 +238,30 @@ function ScannerContent() {
     );
   }
 
-  // Success state
-  if (status === 'success') {
+  // ─── Full-screen steps ───────────────────────────────────────────────
+
+  if (step === 'capture') {
+    return (
+      <CameraCapture
+        onCapture={handleCameraCapture}
+        onCancel={() => setStep(pages.length > 0 ? 'review' : 'select-local')}
+      />
+    );
+  }
+
+  if (step === 'perspective' && capturedImageUrl) {
+    return (
+      <div className="fixed inset-0 z-40 flex flex-col bg-background">
+        <PerspectiveEditor
+          imageDataUrl={capturedImageUrl}
+          onConfirm={handlePerspectiveConfirm}
+          onRetake={() => { setCapturedImageUrl(null); setStep('capture'); }}
+        />
+      </div>
+    );
+  }
+
+  if (step === 'result') {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-sm text-center">
@@ -176,9 +271,7 @@ function ScannerContent() {
               <p className="font-semibold text-lg">¡Enviado!</p>
               <p className="text-sm text-muted-foreground mt-1">{resultMessage}</p>
               {docId && (
-                <p className="text-xs text-muted-foreground mt-2 font-mono">
-                  ID: {docId}
-                </p>
+                <p className="text-xs text-muted-foreground mt-2 font-mono">ID: {docId}</p>
               )}
             </div>
             <Button onClick={handleReset} className="w-full mt-2">
@@ -190,8 +283,17 @@ function ScannerContent() {
     );
   }
 
+  // ─── Main card UI (select-local + review) ────────────────────────────
   return (
     <div className="flex min-h-screen flex-col items-center p-4 pt-8 pb-16">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf"
+        className="hidden"
+        onChange={handlePdfSelect}
+      />
+
       <div className="w-full max-w-md space-y-5">
         {/* Header */}
         <div className="text-center">
@@ -201,109 +303,111 @@ function ScannerContent() {
           </p>
         </div>
 
-        {/* Local selector */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              Local
-              {lockedLocal && <span className="text-xs font-normal text-muted-foreground">(fijado por QR)</span>}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {lockedLocal ? (
-              <div className="flex items-center gap-3 rounded-lg border border-primary bg-primary/5 px-4 py-3">
-                <CheckCircle className="h-4 w-4 text-primary shrink-0" />
-                <span className="text-sm font-medium text-primary">
-                  {LOCALES.find(l => l.slug === lockedLocal)?.name}
-                </span>
-              </div>
-            ) : (
+        {/* Step: local selector */}
+        {step === 'select-local' && (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Selecciona el local</CardTitle>
+            </CardHeader>
+            <CardContent>
               <div className="grid grid-cols-1 gap-2">
                 {LOCALES.map((l) => (
                   <button
                     key={l.slug}
-                    onClick={() => setLocal(l.slug)}
-                    className={`flex items-center justify-between rounded-lg border px-4 py-3 text-sm transition-colors ${
-                      local === l.slug
-                        ? 'border-primary bg-primary/5 font-medium text-primary'
-                        : 'border-border hover:border-primary/50 hover:bg-accent'
-                    }`}
+                    onClick={() => handleLocalSelect(l.slug)}
+                    className="flex items-center justify-between rounded-lg border px-4 py-3 text-sm hover:border-primary/50 hover:bg-accent transition-colors"
                   >
                     <span>{l.name}</span>
-                    {local === l.slug && (
-                      <CheckCircle className="h-4 w-4 shrink-0" />
-                    )}
                   </button>
                 ))}
               </div>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
 
-        {/* File / Camera inputs */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Documento</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {/* Hidden inputs */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,image/jpeg,image/jpg,image/png"
-              className="hidden"
-              onChange={handleInputChange}
-            />
-            <input
-              ref={cameraInputRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={handleInputChange}
-            />
-
-            {preview ? (
-              <div className="space-y-3">
-                {/* Preview */}
-                {preview.mimeType.startsWith('image/') ? (
-                  <div className="relative overflow-hidden rounded-lg border bg-muted">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={`data:${preview.mimeType};base64,${preview.base64}`}
-                      alt="Vista previa"
-                      className="mx-auto max-h-60 object-contain"
-                    />
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-3 rounded-lg border bg-muted p-4">
-                    <FileText className="h-8 w-8 text-muted-foreground shrink-0" />
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">
-                        {preview.filename}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        PDF · {preview.sizeKb} KB
-                      </p>
-                    </div>
-                  </div>
+        {/* Step: review (pages accumulated or PDF uploaded) */}
+        {step === 'review' && (
+          <>
+            {/* Local badge */}
+            <div className="flex items-center gap-3 rounded-lg border border-primary bg-primary/5 px-4 py-3">
+              <CheckCircle className="h-4 w-4 text-primary shrink-0" />
+              <span className="text-sm font-medium text-primary">
+                {LOCALES.find((l) => l.slug === local)?.name}
+                {lockedLocal && (
+                  <span className="ml-1.5 text-xs font-normal text-muted-foreground">(fijado por QR)</span>
                 )}
+              </span>
+            </div>
 
-                {/* Change file */}
-                <button
-                  onClick={handleReset}
-                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <ChevronLeft className="h-3 w-3" />
-                  Cambiar documento
-                </button>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Documento</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {pdfPreview ? (
+                  <>
+                    <div className="flex items-center gap-3 rounded-lg border bg-muted p-4">
+                      <FileText className="h-8 w-8 text-muted-foreground shrink-0" />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{pdfPreview.filename}</p>
+                        <p className="text-xs text-muted-foreground">PDF · {pdfPreview.sizeKb} KB</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => { setPdfPreview(null); setStep('capture'); }}
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <ChevronLeft className="h-3 w-3" /> Cambiar documento
+                    </button>
+                  </>
+                ) : (
+                  <PagePreview
+                    pages={pages}
+                    onRemove={handleRemovePage}
+                    onAddPage={handleAddPage}
+                  />
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Status feedback */}
+            {submitStatus === 'error' && (
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+                <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>{resultMessage}</span>
               </div>
-            ) : (
+            )}
+            {submitStatus === 'duplicate' && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>{resultMessage}</span>
+              </div>
+            )}
+
+            {/* Submit */}
+            <Button
+              className="w-full h-12 text-base"
+              disabled={submitStatus === 'submitting' || (pages.length === 0 && !pdfPreview)}
+              onClick={handleSubmit}
+            >
+              {submitStatus === 'submitting' ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Procesando…</>
+              ) : (
+                <><Send className="mr-2 h-4 w-4" /> Enviar {pages.length > 1 ? `(${pages.length} páginas)` : 'documento'}</>
+              )}
+            </Button>
+          </>
+        )}
+
+        {/* Capture options (only shown in review if no pages yet or as alternate entry) */}
+        {step === 'review' && pages.length === 0 && !pdfPreview && (
+          <Card>
+            <CardContent className="pt-4">
               <div className="grid grid-cols-2 gap-3">
                 <Button
                   variant="outline"
                   className="flex-col h-20 gap-2"
-                  onClick={() => cameraInputRef.current?.click()}
+                  onClick={() => setStep('capture')}
                 >
                   <Camera className="h-6 w-6" />
                   <span className="text-xs">Fotografiar</span>
@@ -317,57 +421,28 @@ function ScannerContent() {
                   <span className="text-xs">Adjuntar PDF</span>
                 </Button>
               </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Status feedback */}
-        {status === 'error' && (
-          <div className="flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
-            <span>{resultMessage}</span>
-          </div>
-        )}
-        {status === 'duplicate' && (
-          <div className="flex items-start gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
-            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-            <span>{resultMessage}</span>
-          </div>
+            </CardContent>
+          </Card>
         )}
 
-        {/* Submit */}
-        <Button
-          className="w-full h-12 text-base"
-          disabled={!preview || !local || status === 'submitting'}
-          onClick={handleSubmit}
-        >
-          {status === 'submitting' ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Procesando…
-            </>
-          ) : (
-            'Enviar documento'
-          )}
-        </Button>
+        {/* Capture entry point from select-local after local chosen (shouldn't render, but fallback) */}
+        {step === 'select-local' && local && (
+          <div className="grid grid-cols-2 gap-3">
+            <Button variant="outline" className="flex-col h-20 gap-2" onClick={() => setStep('capture')}>
+              <Camera className="h-6 w-6" />
+              <span className="text-xs">Fotografiar</span>
+            </Button>
+            <Button variant="outline" className="flex-col h-20 gap-2" onClick={() => fileInputRef.current?.click()}>
+              <Upload className="h-6 w-6" />
+              <span className="text-xs">Adjuntar PDF</span>
+            </Button>
+          </div>
+        )}
 
         {/* Validation hints */}
-        {(!preview || !local) && status === 'idle' && (
-          <div className="space-y-1">
-            {!local && (
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Label className="text-xs text-muted-foreground">
-                  ↑ Selecciona un local
-                </Label>
-              </div>
-            )}
-            {!preview && (
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Label className="text-xs text-muted-foreground">
-                  ↑ Adjunta o fotografía el documento
-                </Label>
-              </div>
-            )}
+        {step === 'select-local' && !local && (
+          <div className="text-xs text-muted-foreground">
+            <Label className="text-xs text-muted-foreground">↑ Selecciona un local para continuar</Label>
           </div>
         )}
       </div>
