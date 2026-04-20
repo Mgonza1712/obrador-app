@@ -50,6 +50,10 @@ npx supabase gen types typescript --project-id anszcyixjopxnskpxewg --schema pub
 - **UI:** shadcn/ui (new-york) + Lucide Icons
 - **Deploy:** Vercel automático desde `main`
 
+### Variables de entorno relevantes (Vercel)
+- `EXTRACTOR_URL` — URL base del FastAPI extractor (ej. `http://158.179.211.177:8001`).
+  Usada por `app/api/job-status/[jobId]/route.ts` para proxear el estado de un job al scanner.
+
 ## 3. Naming Consistency — Variables unificadas entre plataformas
 
 **CRÍTICO:** Estos nombres se usan en TODO el pipeline (prompt LLM, extractor Python, adapter N8N, función SQL, app). Al implementar cambios, respetar siempre esta tabla:
@@ -104,7 +108,8 @@ erp_item_aliases     — Diccionario nombre/formato por proveedor
                        Campos: raw_name, provider_id, master_item_id,
                        formato_compra, envases_por_formato, contenido_por_envase
 erp_price_history    — Historial precios. unit_price = SIN IVA, iva_percent guardado
-                       status: 'active'|'archived'|'quote'|'inactive'|'disputed'
+                       status: 'active'|'archived'|'quote'|'inactive'|'disputed'|'deposito'
+                       (deposito = fianza de envase retornable — no contamina costes de catálogo)
 erp_providers        — channel: 'email'|'whatsapp'|'telegram'|'telefono'
 extraction_logs      — Metadata de cada extracción
 extraction_corrections — Correcciones humanas (dataset para mejora iterativa)
@@ -205,6 +210,9 @@ app/(dashboard)/catalogo/            — Catálogo con proveedor preferido
 app/(dashboard)/proveedores/         — Gestión de proveedores
 app/(dashboard)/alertas-rentabilidad/ — Alertas financieras
 app/(dashboard)/admin/revision/      — Revisión humana de documentos pendientes
+app/scan/                            — Scanner PWA (cámara + perspectiva + multi-página)
+app/api/job-status/[jobId]/          — Proxy → FastAPI GET /job-status/{jobId}
+                                       Usado por el scanner para polling de estado async
 ```
 
 ## 13. Actualización de este archivo

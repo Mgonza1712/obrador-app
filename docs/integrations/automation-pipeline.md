@@ -16,110 +16,82 @@ Este documento es el contrato *entre sistemas*. La semántica de negocio (precio
   - tablas `erp_*`, `extraction_*`, `erp_channel_accounts`
   - vista `vw_catalogo_precios`
 
-Fecha de verificación: 2026-04-09. Última actualización: 2026-04-14 (adapter movido al extractor).
+Fecha de verificación: 2026-04-09. Última actualización: 2026-04-17 (pipeline async + iva_footer).
 
-## Workflows n8n (estado observado)
+## Workflows n8n (estado actual)
 
-### Workflows activos (según n8n MCP)
+| ID | Nombre | Rol |
+|----|--------|-----|
+| `Sw13rBM2igPb0xQW` | Pizca - Scanner Intake | Valida token, llama Core Extractor, responde `{job_id}` |
+| `bDJGiYfixmUNZjjv` | Pizca - Core Extractor | Sub-workflow: sube PDF a Storage, llama FastAPI `/extract`, retorna `{job_id}` |
+| `w7IIm2Mojb3v0pm7` | Pizca - Extraction Callback | Recibe resultado de FastAPI, ejecuta SQL v4, llama `/job-complete/{job_id}` |
+| `D5ul7ov1pTHnpQlb` | Pizca - WPP Doc Intake | Canal WhatsApp — pendiente migración a async |
 
-- `Error trigger bot Asistente Compras` (activo) — alertas ante errores
-
-Otros workflows activos existen, pero **no estaban accesibles vía MCP** (n8n devuelve: “Workflow is not available in MCP”). Por lo tanto, no se documentan aquí como “fuente de verdad” del pipeline.
-
-### Workflows relevantes (según el grafo de nodos)
-
-- `78 Sabores - Bot catalogo compras` (inactivo, pero con pipeline completo)
-  - descarga archivo Telegram
-  - guarda PDF en Storage (bucket `facturas`)
-  - resuelve `tenant_id` desde canal
-  - llama extractor FastAPI
-  - adapta payload al contrato SQL v4
-  - ejecuta `procesar_factura_completa_v4`
-  - notifica duplicados / resultado de extracción
-
-## Paso a paso: ingestión de un documento (ruta “PDF”)
+## Paso a paso: ingestión de un documento (flujo async — desde 2026-04-17)
 
 ### 0) Resolver multi-tenancy desde el canal
 
 Fuente: tabla Supabase `erp_channel_accounts` (RLS deshabilitado).
 
-- Input típico: `channel='telegram'` + `account_id=<chat_id>`
+- Input típico: `channel='scanner'` + `account_id=<token>`
 - Output: `tenant_id`
 
 **Invariante:** `tenant_id` se determina antes de llamar al extractor o al SQL v4.
 
-### 1) Obtener archivo desde el canal
+### 1) Obtener archivo y persistir en Storage
 
-- n8n descarga el binario (ej. Telegram `file_id`).
+- n8n (Core Extractor): sube el binario a Supabase Storage (bucket `facturas`), obtiene `filename`.
+- `drive_url` en `erp_documents` es el nombre del archivo en storage.
+- `app/actions/documents.ts` genera Signed URL desde `supabase.storage.from('facturas')` usando el último segmento de `drive_url`.
 
-### 2) Persistir archivo en Storage y construir `file_url`
+### 2) Llamar al extractor FastAPI (async)
 
-En este sistema, “file_url” es el **identificador/nombre del archivo en storage** (no necesariamente una URL pública).
+- Endpoint: `POST http://172.17.0.1:8001/extract`
+- Body: `{document_base64, document_type, tenant_id, filename, is_image}`
+- **Respuesta inmediata** (<1s): `{status: “processing”, job_id: “<uuid>”}`
 
-Verificado en `obrador-app`: `app/actions/documents.ts` genera Signed URL desde `supabase.storage.from('facturas')` usando el último segmento de `drive_url`.
+El extractor procesa en background (ThreadPoolExecutor, hasta 3 en paralelo) y llama al callback de n8n al terminar.
 
-### 3) Llamar al extractor FastAPI
+### 3) Polling desde el scanner PWA
 
-- Endpoint observado en n8n: `POST http://172.17.0.1:8001/extract`
-- Body observado: JSON con `document_base64`, `document_type` (auto/factura/albaran/presupuesto), `tenant_id`, `filename`, `is_image`.
+- El scanner recibe `{job_id}` y hace polling cada 5s a `/api/job-status/{jobId}` (Next.js API route que proxea a FastAPI `GET /job-status/{job_id}`).
+- Timeout: 3 minutos (36 polls).
+- Estados posibles: `processing` → `extracted` → `success | duplicate | failed`
 
-**Responsabilidad del extractor:** leer el documento y devolver un JSON de extracción+normalización (con confidences).
+### 4) Callback de FastAPI a n8n
 
-### 4) Adaptar el JSON del extractor al contrato de `procesar_factura_completa_v4`
-
-**El extractor ya incluye el campo `sql_payload` en su respuesta.** El nodo n8n "Adapter Extractor → SQL v4" es ahora un pass-through:
-
-```javascript
-return [{ json: $json.sql_payload }];
+Cuando termina la extracción, FastAPI hace `POST N8N_CALLBACK_URL` con:
+```json
+{
+  “job_id”: “...”,
+  “tenant_id”: “...”,
+  “filename”: “scan_xxx.pdf”,
+  “sql_payload”: { “documento”: {...}, “items”: [...] },
+  ...resto del ExtractionResult...
+}
 ```
 
-El payload `sql_payload` lo construye `build_sql_payload()` en `pizca-server/services/extractor.py`. Su estructura (claves canónicas; nombres exactos importan):
+El `sql_payload` lo construye `build_sql_payload()` en `pizca-server/services/extractor.py`. Estructura canónica:
 
 ```json
 {
-  "documento": {
-    "proveedor_nombre": "...",
-    "fecha": "YYYY-MM-DD",
-    "numero_documento": "...",
-    "total_documento": 123.45,
-    "local_receptor": "...",
-    "tipo_documento": "Factura | Albaran | Presupuesto | Factura Resumen",
-    "albaranes_vinculados": ["<numero_albaran>"]
+  “documento”: {
+    “proveedor_nombre”: “...”,
+    “fecha”: “YYYY-MM-DD”,
+    “numero_documento”: “...”,
+    “total_documento”: 123.45,
+    “local_receptor”: “...”,
+    “tipo_documento”: “Factura | Albaran | Presupuesto | Factura Resumen”,
+    “albaranes_vinculados”: [],
+    “iva_footer”: [{“tipo_iva”: 10, “base”: 72.03, “cuota”: 7.20}]
   },
-  "items": [
-    {
-      "raw_name": "...",
-      "cantidad_comprada": 1,
-      "precio_unitario": 10.00,
-      "precio_linea": 10.00,
-      "iva_percent": 10,
-      "confidence_precio": 0.93,
-      "confidence_cantidad": 0.90,
-      "alias_match": true,
-      "master_item_id": "<uuid>",
-      "is_envase_retornable": false,
-      "official_name": "...",
-      "base_unit": "ud|g|ml",
-      "formato_compra": "Caja|...",
-      "envases_por_formato": 24,
-      "contenido_por_envase": 330,
-      "categoria": "...",
-      "is_existing_master": false,
-      "suggested_master_item_id": null,
-      "modelo_llm": "...",
-      "unidad_tal_como_aparece": "...",
-      "needs_review": true,
-      "review_reasons": ["low_price_confidence|new_product"]
-    }
-  ]
+  “items”: [...]
 }
 ```
 
 Notas:
-
-- `precio_unitario` y `precio_linea` son **SIN IVA** (ver invariantes en `CLAUDE.md`).
-- `precio_linea` se calcula en el extractor: `round(cantidad_comprada × precio_unitario, 4)`.
-- La función SQL también recalcula costes derivados (`cost_per_base_unit`, etc.) usando envases/contenido.
+- `precio_unitario` y `precio_linea` son **SIN IVA**.
+- `iva_footer` se extrae del pie del documento (más fiable que inferencia por línea).
 - La estructura canónica de `SqlPayload` vive en `pizca-server/pizca-extractor/models/schemas.py`.
 
 ### 5) Ejecutar función SQL v4 en Supabase

@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState, useRef, useCallback } from 'react';
+import { Suspense, useState, useRef, useCallback, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -29,7 +29,7 @@ const LOCALES = [
 ] as const;
 
 type LocalSlug = (typeof LOCALES)[number]['slug'];
-type SubmitStatus = 'idle' | 'submitting' | 'success' | 'error' | 'duplicate';
+type SubmitStatus = 'idle' | 'submitting' | 'processing' | 'success' | 'error' | 'duplicate';
 type Step = 'select-local' | 'capture' | 'perspective' | 'review' | 'result';
 
 function dataUrlToBase64(dataUrl: string): string {
@@ -92,7 +92,67 @@ function ScannerContent() {
   const [resultMessage, setResultMessage] = useState('');
   const [docId, setDocId] = useState<string | null>(null);
 
+  const [jobId, setJobId] = useState<string | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollCountRef = useRef(0);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ─── Polling — arranca cuando jobId está seteado ─────────────────────
+  useEffect(() => {
+    if (!jobId) return;
+
+    const MAX_POLLS = 36; // 3 minutos a 5s por poll
+    pollCountRef.current = 0;
+
+    pollingRef.current = setInterval(async () => {
+      pollCountRef.current += 1;
+
+      try {
+        const res = await fetch(`/api/job-status/${jobId}`, { cache: 'no-store' });
+        const data = await res.json();
+
+        if (data.status === 'success') {
+          clearInterval(pollingRef.current!);
+          setSubmitStatus('success');
+          setDocId(data.document_id ?? null);
+          setResultMessage(
+            data.auto_approval
+              ? 'Documento aprobado automáticamente.'
+              : 'Documento enviado. Pendiente de revisión.'
+          );
+          setStep('result');
+        } else if (data.status === 'duplicate') {
+          clearInterval(pollingRef.current!);
+          setSubmitStatus('duplicate');
+          setResultMessage(data.message || 'Documento ya procesado anteriormente.');
+        } else if (data.status === 'failed') {
+          clearInterval(pollingRef.current!);
+          setSubmitStatus('error');
+          setResultMessage(data.error || 'Error durante la extracción.');
+        } else if (pollCountRef.current >= MAX_POLLS) {
+          // Timeout — el documento puede haberse procesado igual
+          clearInterval(pollingRef.current!);
+          setSubmitStatus('success');
+          setDocId(null);
+          setResultMessage('Documento enviado. Puede tardar unos minutos en aparecer en la lista.');
+          setStep('result');
+        }
+        // status === 'processing' | 'extracted' | 'not_found' → seguir esperando
+      } catch {
+        // Error de red transitorio — seguir intentando hasta MAX_POLLS
+        if (pollCountRef.current >= MAX_POLLS) {
+          clearInterval(pollingRef.current!);
+          setSubmitStatus('error');
+          setResultMessage('No se pudo obtener el estado. Verifica la lista de documentos.');
+        }
+      }
+    }, 5000);
+
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, [jobId]);
 
   // ─── Local selection ────────────────────────────────────────────────
   const handleLocalSelect = (slug: LocalSlug) => {
@@ -189,6 +249,14 @@ function ScannerContent() {
         return;
       }
 
+      // Respuesta async: el extractor procesará en background
+      if (data.status === 'processing' && data.job_id) {
+        setJobId(data.job_id);
+        setSubmitStatus('processing');
+        return;
+      }
+
+      // Respuesta sync legacy (por si acaso) o respuesta directa de n8n
       if (data.status === 'duplicate') {
         setSubmitStatus('duplicate');
         setResultMessage(data.message || 'Documento ya procesado anteriormente.');
@@ -196,7 +264,7 @@ function ScannerContent() {
       }
 
       setSubmitStatus('success');
-      setDocId(data.doc_id ?? null);
+      setDocId(data.doc_id ?? data.document_id ?? null);
       setResultMessage(
         data.auto_approval
           ? 'Documento aprobado automáticamente.'
@@ -211,12 +279,14 @@ function ScannerContent() {
 
   // ─── Reset ───────────────────────────────────────────────────────────
   const handleReset = () => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
     setPages([]);
     setPdfPreview(null);
     setCapturedImageUrl(null);
     setSubmitStatus('idle');
     setResultMessage('');
     setDocId(null);
+    setJobId(null);
     setStep(lockedLocal ? 'capture' : 'select-local');
     if (!lockedLocal) setLocal(null);
   };
@@ -387,11 +457,13 @@ function ScannerContent() {
             {/* Submit */}
             <Button
               className="w-full h-12 text-base"
-              disabled={submitStatus === 'submitting' || (pages.length === 0 && !pdfPreview)}
+              disabled={submitStatus === 'submitting' || submitStatus === 'processing' || (pages.length === 0 && !pdfPreview)}
               onClick={handleSubmit}
             >
               {submitStatus === 'submitting' ? (
-                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Procesando…</>
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enviando…</>
+              ) : submitStatus === 'processing' ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Procesando documento…</>
               ) : (
                 <><Send className="mr-2 h-4 w-4" /> Enviar {pages.length > 1 ? `(${pages.length} páginas)` : 'documento'}</>
               )}
