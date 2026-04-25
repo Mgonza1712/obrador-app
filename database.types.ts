@@ -344,6 +344,7 @@ export type Database = {
           created_at: string | null
           id: string
           is_active: boolean
+          real_phone: string | null
           role: string
           tenant_id: string
         }
@@ -354,6 +355,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           is_active?: boolean
+          real_phone?: string | null
           role?: string
           tenant_id: string
         }
@@ -364,6 +366,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           is_active?: boolean
+          real_phone?: string | null
           role?: string
           tenant_id?: string
         }
@@ -401,6 +404,7 @@ export type Database = {
       erp_documents: {
         Row: {
           ai_interpretation: Json | null
+          assigned_reviewer_id: string | null
           created_at: string | null
           doc_type: string
           document_date: string | null
@@ -419,6 +423,7 @@ export type Database = {
         }
         Insert: {
           ai_interpretation?: Json | null
+          assigned_reviewer_id?: string | null
           created_at?: string | null
           doc_type: string
           document_date?: string | null
@@ -437,6 +442,7 @@ export type Database = {
         }
         Update: {
           ai_interpretation?: Json | null
+          assigned_reviewer_id?: string | null
           created_at?: string | null
           doc_type?: string
           document_date?: string | null
@@ -454,6 +460,13 @@ export type Database = {
           venue_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "erp_documents_assigned_reviewer_id_fkey"
+            columns: ["assigned_reviewer_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "erp_documents_parent_invoice_id_fkey"
             columns: ["parent_invoice_id"]
@@ -571,6 +584,45 @@ export type Database = {
           },
         ]
       }
+      erp_order_documents: {
+        Row: {
+          created_at: string
+          document_id: string
+          linked_by: string
+          match_score: number | null
+          order_id: string
+        }
+        Insert: {
+          created_at?: string
+          document_id: string
+          linked_by?: string
+          match_score?: number | null
+          order_id: string
+        }
+        Update: {
+          created_at?: string
+          document_id?: string
+          linked_by?: string
+          match_score?: number | null
+          order_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "erp_order_documents_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "erp_documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "erp_order_documents_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "erp_purchase_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       erp_price_history: {
         Row: {
           cost_per_base_unit: number | null
@@ -585,6 +637,7 @@ export type Database = {
           provider_id: string | null
           status: string | null
           unit_price: number
+          valid_until: string | null
           venue_id: string | null
         }
         Insert: {
@@ -600,6 +653,7 @@ export type Database = {
           provider_id?: string | null
           status?: string | null
           unit_price: number
+          valid_until?: string | null
           venue_id?: string | null
         }
         Update: {
@@ -615,6 +669,7 @@ export type Database = {
           provider_id?: string | null
           status?: string | null
           unit_price?: number
+          valid_until?: string | null
           venue_id?: string | null
         }
         Relationships: [
@@ -671,6 +726,7 @@ export type Database = {
           price_confidence_threshold: number
           shared_pricing: boolean
           tenant_id: string | null
+          whatsapp_jid: string | null
         }
         Insert: {
           channel?: string | null
@@ -687,6 +743,7 @@ export type Database = {
           price_confidence_threshold?: number
           shared_pricing?: boolean
           tenant_id?: string | null
+          whatsapp_jid?: string | null
         }
         Update: {
           channel?: string | null
@@ -703,6 +760,7 @@ export type Database = {
           price_confidence_threshold?: number
           shared_pricing?: boolean
           tenant_id?: string | null
+          whatsapp_jid?: string | null
         }
         Relationships: [
           {
@@ -785,6 +843,167 @@ export type Database = {
           },
         ]
       }
+      erp_purchase_order_lines: {
+        Row: {
+          estimated_unit_price: number | null
+          id: string
+          is_cancelled: boolean
+          is_matched: boolean
+          master_item_id: string | null
+          match_confidence: number | null
+          notes: string | null
+          order_id: string
+          provider_id: string | null
+          qty_received: number
+          quantity: number
+          raw_text: string
+          sort_order: number | null
+          unit: string | null
+        }
+        Insert: {
+          estimated_unit_price?: number | null
+          id?: string
+          is_cancelled?: boolean
+          is_matched?: boolean
+          master_item_id?: string | null
+          match_confidence?: number | null
+          notes?: string | null
+          order_id: string
+          provider_id?: string | null
+          qty_received?: number
+          quantity: number
+          raw_text: string
+          sort_order?: number | null
+          unit?: string | null
+        }
+        Update: {
+          estimated_unit_price?: number | null
+          id?: string
+          is_cancelled?: boolean
+          is_matched?: boolean
+          master_item_id?: string | null
+          match_confidence?: number | null
+          notes?: string | null
+          order_id?: string
+          provider_id?: string | null
+          qty_received?: number
+          quantity?: number
+          raw_text?: string
+          sort_order?: number | null
+          unit?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "erp_purchase_order_lines_master_item_id_fkey"
+            columns: ["master_item_id"]
+            isOneToOne: false
+            referencedRelation: "bom_lines_expanded"
+            referencedColumns: ["master_item_id"]
+          },
+          {
+            foreignKeyName: "erp_purchase_order_lines_master_item_id_fkey"
+            columns: ["master_item_id"]
+            isOneToOne: false
+            referencedRelation: "erp_master_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "erp_purchase_order_lines_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "erp_purchase_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "erp_purchase_order_lines_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: false
+            referencedRelation: "erp_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      erp_purchase_orders: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          created_by_user_id: string | null
+          delivery_status: string
+          id: string
+          is_template: boolean
+          next_run_at: string | null
+          notes: string | null
+          provider_notes: Json | null
+          recurrence_cron: string | null
+          recurrence_label: string | null
+          scheduled_for: string | null
+          sector: string | null
+          sent_at: string | null
+          source_channel: string
+          status: string
+          template_id: string | null
+          tenant_id: string
+          venue_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          created_by_user_id?: string | null
+          delivery_status?: string
+          id?: string
+          is_template?: boolean
+          next_run_at?: string | null
+          notes?: string | null
+          provider_notes?: Json | null
+          recurrence_cron?: string | null
+          recurrence_label?: string | null
+          scheduled_for?: string | null
+          sector?: string | null
+          sent_at?: string | null
+          source_channel?: string
+          status?: string
+          template_id?: string | null
+          tenant_id: string
+          venue_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          created_by_user_id?: string | null
+          delivery_status?: string
+          id?: string
+          is_template?: boolean
+          next_run_at?: string | null
+          notes?: string | null
+          provider_notes?: Json | null
+          recurrence_cron?: string | null
+          recurrence_label?: string | null
+          scheduled_for?: string | null
+          sector?: string | null
+          sent_at?: string | null
+          source_channel?: string
+          status?: string
+          template_id?: string | null
+          tenant_id?: string
+          venue_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "erp_purchase_orders_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "erp_purchase_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "erp_purchase_orders_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "erp_venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       erp_tenant_config: {
         Row: {
           created_at: string | null
@@ -822,19 +1041,34 @@ export type Database = {
       }
       erp_tenants: {
         Row: {
+          chatwoot_account_id: number | null
+          chatwoot_inbox_id: number | null
           created_at: string | null
+          evolution_api_url: string | null
+          evolution_bot_instance: string | null
+          evolution_ordering_instance: string | null
           id: string
           name: string
           subscription_plan: string | null
         }
         Insert: {
+          chatwoot_account_id?: number | null
+          chatwoot_inbox_id?: number | null
           created_at?: string | null
+          evolution_api_url?: string | null
+          evolution_bot_instance?: string | null
+          evolution_ordering_instance?: string | null
           id?: string
           name: string
           subscription_plan?: string | null
         }
         Update: {
+          chatwoot_account_id?: number | null
+          chatwoot_inbox_id?: number | null
           created_at?: string | null
+          evolution_api_url?: string | null
+          evolution_bot_instance?: string | null
+          evolution_ordering_instance?: string | null
           id?: string
           name?: string
           subscription_plan?: string | null
@@ -846,6 +1080,7 @@ export type Database = {
           created_at: string | null
           id: string
           name: string
+          reception_token: string | null
           tenant_id: string | null
           type: string | null
         }
@@ -853,6 +1088,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           name: string
+          reception_token?: string | null
           tenant_id?: string | null
           type?: string | null
         }
@@ -860,6 +1096,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           name?: string
+          reception_token?: string | null
           tenant_id?: string | null
           type?: string | null
         }
@@ -1001,24 +1238,42 @@ export type Database = {
       profiles: {
         Row: {
           created_at: string | null
+          full_name: string | null
           id: string
+          phone: string | null
           role: string | null
+          sector: string | null
           tenant_id: string | null
           venue_id: string | null
+          whatsapp_jid: string | null
+          whatsapp_link_code: string | null
+          whatsapp_link_code_expires_at: string | null
         }
         Insert: {
           created_at?: string | null
+          full_name?: string | null
           id: string
+          phone?: string | null
           role?: string | null
+          sector?: string | null
           tenant_id?: string | null
           venue_id?: string | null
+          whatsapp_jid?: string | null
+          whatsapp_link_code?: string | null
+          whatsapp_link_code_expires_at?: string | null
         }
         Update: {
           created_at?: string | null
+          full_name?: string | null
           id?: string
+          phone?: string | null
           role?: string | null
+          sector?: string | null
           tenant_id?: string | null
           venue_id?: string | null
+          whatsapp_jid?: string | null
+          whatsapp_link_code?: string | null
+          whatsapp_link_code_expires_at?: string | null
         }
         Relationships: [
           {
@@ -1196,6 +1451,39 @@ export type Database = {
           to_unit?: string
         }
         Relationships: []
+      }
+      user_venue_sectors: {
+        Row: {
+          sector: string
+          user_id: string
+          venue_id: string
+        }
+        Insert: {
+          sector: string
+          user_id: string
+          venue_id: string
+        }
+        Update: {
+          sector?: string
+          user_id?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_venue_sectors_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_venue_sectors_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "erp_venues"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
@@ -1493,6 +1781,10 @@ export type Database = {
     }
     Functions: {
       auth_tenant_id: { Args: never; Returns: string }
+      bot_safe_query: {
+        Args: { p_tenant_id: string; query_text: string }
+        Returns: Json
+      }
       calculate_assembly_cogs: {
         Args: { p_assembly_id: string }
         Returns: number

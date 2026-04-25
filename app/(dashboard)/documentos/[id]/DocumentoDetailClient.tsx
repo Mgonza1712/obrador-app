@@ -4,7 +4,8 @@ import { useTransition, useState, useId, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import {
     ArrowLeft, Plus, Trash2, Save, CheckCircle, Loader2, AlertCircle, ExternalLink,
-    Building2, ChevronsUpDown, Check, Link2, Search, ChevronDown,
+    Building2, ChevronsUpDown, Check, Link2, Search, ChevronDown, GitCompareArrows,
+    FileText,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -20,6 +21,8 @@ import {
 import type { DocumentDetail, PurchaseLine } from './page'
 import type { Venue, Provider, MasterItemOption } from '../_actions'
 import { FORMATOS_COMPRA, BASE_UNITS, PRODUCT_CATEGORIES } from '@/lib/constants'
+import ComparacionTab from './_components/ComparacionTab'
+import type { ComparacionData } from './_components/ComparacionTab'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -424,7 +427,15 @@ function SkippedLineEditor({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) {
+type ActiveTab = 'detalles' | 'comparar'
+
+export default function DocumentoDetailClient({
+    doc,
+    comparacion,
+}: {
+    doc: DocumentDetail
+    comparacion?: ComparacionData | null
+}) {
     const uid = useId()
     const [isPending, startTransition] = useTransition()
     const [isApprovePending, startApproveTransition] = useTransition()
@@ -447,9 +458,14 @@ export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) 
     const [pendingVenueId, setPendingVenueId] = useState<string | null>(null)
     const [pendingVenueName, setPendingVenueName] = useState<string | null>(null)
 
+    // Tab state (only for presupuestos with comparacion data)
+    const [activeTab, setActiveTab] = useState<ActiveTab>('detalles')
+
     // UI state
     const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
     const [isDirty, setIsDirty] = useState(false)
+
+    const isPresupuesto = doc.doc_type === 'Presupuesto' && comparacion != null
 
     const showReconciliation =
         doc.reconciliation_status !== null ||
@@ -629,6 +645,43 @@ export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) 
                     )}
                 </div>
             </div>
+
+            {/* Tab navigation — only for Presupuestos */}
+            {isPresupuesto && (
+                <div className="flex gap-1 rounded-lg border border-border bg-muted/30 p-1 w-fit">
+                    <button
+                        onClick={() => setActiveTab('detalles')}
+                        className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                            activeTab === 'detalles'
+                                ? 'bg-background text-foreground shadow-sm'
+                                : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                    >
+                        <FileText className="h-3.5 w-3.5" />
+                        Detalles
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('comparar')}
+                        className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                            activeTab === 'comparar'
+                                ? 'bg-background text-foreground shadow-sm'
+                                : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                    >
+                        <GitCompareArrows className="h-3.5 w-3.5" />
+                        Comparar precios
+                    </button>
+                </div>
+            )}
+
+            {/* Comparar tab content */}
+            {isPresupuesto && activeTab === 'comparar' && (
+                <ComparacionTab data={comparacion!} />
+            )}
+
+            {/* Detalles tab (always shown for non-presupuestos, conditionally for presupuestos) */}
+            {(!isPresupuesto || activeTab === 'detalles') && (
+            <>
 
             {/* Header editable fields */}
             <section className="rounded-lg border border-border bg-card p-5 space-y-4">
@@ -884,6 +937,9 @@ export default function DocumentoDetailClient({ doc }: { doc: DocumentDetail }) 
                     </div>
                 )}
             </section>
+
+            </> /* end detalles tab wrapper */
+            )}
 
             {/* Toast */}
             {toast && (

@@ -4,7 +4,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { Calculator, ChefHat, ClipboardCheck, ConciergeBell, Home, LogIn, LogOut, Receipt, ShoppingBasket, Truck } from 'lucide-react'
+import { Calculator, ChefHat, ClipboardCheck, ConciergeBell, Home, LogIn, LogOut, Package, Receipt, Settings, ShoppingBasket, Truck } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 
@@ -15,8 +15,10 @@ const navItems = [
     { label: 'Revisión Docs', mobileLabel: 'Revisión', href: '/admin/revision', icon: ClipboardCheck },
     { label: 'Proveedores', mobileLabel: 'Proveed.', href: '/proveedores', icon: Truck },
     { label: 'Catálogo', mobileLabel: 'Catálogo', href: '/catalogo', icon: ShoppingBasket },
+    { label: 'Pedidos', mobileLabel: 'Pedidos', href: '/pedidos', icon: Package },
     { label: 'Documentos', mobileLabel: 'Docs', href: '/documentos', icon: Receipt },
     { label: 'Escandallos', mobileLabel: 'Escand.', href: '/escandallos', icon: Calculator },
+    { label: 'Configuración', mobileLabel: 'Config.', href: '/admin/usuarios', icon: Settings },
 ]
 
 export default function Sidebar() {
