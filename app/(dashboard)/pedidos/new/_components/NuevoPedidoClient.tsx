@@ -347,7 +347,7 @@ function ProviderBrowse({
                                     </div>
                                     <input
                                         type="number"
-                                        min="0.001"
+                                        min="1"
                                         step="1"
                                         value={getQty(item.masterItem.id)}
                                         onChange={(e) => setQuantities((prev) => ({ ...prev, [item.masterItem.id]: e.target.value }))}
@@ -381,6 +381,7 @@ export default function NuevoPedidoClient({ masterItems, providers, activePrices
     const [lines, setLines] = useState<OrderLine[]>([])
     const [mode, setMode] = useState<Mode>('catalog')
     const [venueId, setVenueId] = useState<string | null>(defaultVenueId)
+    const [providerNotes, setProviderNotes] = useState<Record<string, string>>({})
 
     // Catalog mode state
     const [selectedItem, setSelectedItem] = useState<MasterItem | null>(null)
@@ -525,8 +526,10 @@ export default function NuevoPedidoClient({ masterItems, providers, activePrices
                     unit: l.unit,
                     master_item_id: l.masterItemId || undefined,
                     provider_id: l.providerId || undefined,
+                    estimated_unit_price: l.estimatedUnitPrice ?? undefined,
                 })),
-                venueId
+                venueId,
+                providerNotes
             )
             if (res.success && res.orderId) {
                 router.push(`/pedidos/${res.orderId}`)
@@ -648,8 +651,8 @@ export default function NuevoPedidoClient({ masterItems, providers, activePrices
                                 <label className="mb-1 block text-xs font-medium text-muted-foreground">Cantidad</label>
                                 <input
                                     type="number"
-                                    min="0.001"
-                                    step="0.001"
+                                    min="1"
+                                    step="1"
                                     value={quantity}
                                     onChange={(e) => setQuantity(e.target.value)}
                                     className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-ring"
@@ -762,8 +765,8 @@ export default function NuevoPedidoClient({ masterItems, providers, activePrices
                                 <label className="mb-1 block text-xs font-medium text-muted-foreground">Cantidad</label>
                                 <input
                                     type="number"
-                                    min="0.001"
-                                    step="0.001"
+                                    min="1"
+                                    step="1"
                                     value={quantity}
                                     onChange={(e) => setQuantity(e.target.value)}
                                     className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-ring"
@@ -838,8 +841,8 @@ export default function NuevoPedidoClient({ masterItems, providers, activePrices
                                     <td className="px-4 py-2.5 text-right">
                                         <input
                                             type="number"
-                                            min="0.001"
-                                            step="0.001"
+                                            min="1"
+                                            step="1"
                                             value={line.quantity}
                                             onChange={(e) => {
                                                 const v = parseFloat(e.target.value)
@@ -878,6 +881,34 @@ export default function NuevoPedidoClient({ masterItems, providers, activePrices
                     </table>
                 </section>
             )}
+
+            {/* Per-provider notes — shown once lines with providers exist */}
+            {lines.some((l) => l.providerId) && (() => {
+                const providerMap = new Map<string, string>()
+                for (const l of lines) {
+                    if (l.providerId && l.providerName && !providerMap.has(l.providerId)) {
+                        providerMap.set(l.providerId, l.providerName)
+                    }
+                }
+                return (
+                    <section className="rounded-lg border border-border bg-card p-5 space-y-3">
+                        <h2 className="text-sm font-semibold">Aclaraciones por proveedor</h2>
+                        <p className="text-xs text-muted-foreground">Notas que se incluirán en el mensaje de envío a cada proveedor.</p>
+                        {Array.from(providerMap.entries()).map(([pid, pname]) => (
+                            <div key={pid}>
+                                <label className="mb-1 block text-xs font-medium text-muted-foreground">{pname}</label>
+                                <textarea
+                                    value={providerNotes[pid] ?? ''}
+                                    onChange={(e) => setProviderNotes((prev) => ({ ...prev, [pid]: e.target.value }))}
+                                    placeholder={`Aclaraciones para ${pname}...`}
+                                    rows={2}
+                                    className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring"
+                                />
+                            </div>
+                        ))}
+                    </section>
+                )
+            })()}
 
             {/* Empty state */}
             {lines.length === 0 && (

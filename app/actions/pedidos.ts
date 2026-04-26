@@ -262,27 +262,21 @@ export async function linkOrderLine(
     return { success: true }
 }
 
-export async function sendOrder(orderId: string): Promise<ActionResult & { sent?: string[]; manual?: string[] }> {
-    const supabase = await createClient()
+// ── Internal: send one order to n8n webhook ───────────────────────────────────
 
-    const webhookUrl = process.env.SEND_ORDER_WEBHOOK_URL
-    if (!webhookUrl) {
-        return { success: false, error: 'SEND_ORDER_WEBHOOK_URL no configurada' }
-    }
-
-    // Fetch order data (provider_notes + venue_id)
-    const { data: orderData } = await (supabase as any)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function _sendOrderWebhook(orderId: string, webhookUrl: string, supabase: any): Promise<ActionResult & { sent?: string[]; manual?: string[] }> {
+    const { data: orderData } = await supabase
         .from('erp_purchase_orders')
         .select('venue_id, provider_notes')
         .eq('id', orderId)
         .single()
 
-    // Fetch venue email config for Resend (email per local)
     let emailFrom: string | null = null
     let emailFromName: string | null = null
     let replyToEmail: string | null = null
     if (orderData?.venue_id) {
-        const { data: venueData } = await (supabase as any)
+        const { data: venueData } = await supabase
             .from('erp_venues')
             .select('email_from, email_from_name, reply_to_email')
             .eq('id', orderData.venue_id)
@@ -305,35 +299,78 @@ export async function sendOrder(orderId: string): Promise<ActionResult & { sent?
             }),
         })
 
+        const rawText = await res.text()
         if (!res.ok) {
-            const text = await res.text()
-            return { success: false, error: `Webhook error ${res.status}: ${text}` }
+            return { success: false, error: `Webhook error ${res.status}: ${rawText}` }
         }
 
-        const result = await res.json()
+        let result: { sent?: string[]; manual?: string[] } = {}
+        try {
+            result = rawText ? JSON.parse(rawText) : {}
+        } catch {
+            console.error('n8n webhook returned non-JSON:', rawText)
+        }
 
-        // Mark order as sent in Supabase (also done by n8n, belt+suspenders)
-        await (supabase as any)
+        // Mark as sent (n8n also does this — belt+suspenders)
+        await supabase
             .from('erp_purchase_orders')
             .update({ status: 'sent', sent_at: new Date().toISOString() })
             .eq('id', orderId)
 
         revalidatePath(`/pedidos/${orderId}`)
-        revalidatePath('/pedidos')
-
-        return {
-            success: true,
-            sent: result.sent ?? [],
-            manual: result.manual ?? [],
-        }
+        return { success: true, sent: result.sent ?? [], manual: result.manual ?? [] }
     } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : 'Error desconocido' }
     }
 }
 
+export async function sendOrder(orderId: string): Promise<ActionResult & { sent?: string[]; manual?: string[]; splitInto?: number }> {
+    const supabase = await createClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sb = supabase as any
+
+    const webhookUrl = process.env.SEND_ORDER_WEBHOOK_URL
+    if (!webhookUrl) {
+        return { success: false, error: 'SEND_ORDER_WEBHOOK_URL no configurada' }
+    }
+
+    // Check distinct providers to decide if auto-split is needed
+    const { data: lines } = await sb
+        .from('erp_purchase_order_lines')
+        .select('provider_id')
+        .eq('order_id', orderId)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const providerIds = [...new Set(((lines ?? []) as any[]).map((l) => l.provider_id).filter(Boolean))]
+
+    if (providerIds.length > 1) {
+        // Auto-split by provider, then send each child order
+        const splitResult = await splitOrderByProvider(orderId)
+        if (!splitResult.success || !splitResult.orderIds) {
+            return { success: false, error: splitResult.error ?? 'Error al dividir el pedido' }
+        }
+
+        const errors: string[] = []
+        for (const childId of splitResult.orderIds) {
+            const res = await _sendOrderWebhook(childId, webhookUrl, sb)
+            if (!res.success) errors.push(res.error ?? 'Error desconocido')
+        }
+
+        revalidatePath('/pedidos')
+        if (errors.length > 0) return { success: false, error: errors.join(' | ') }
+        return { success: true, splitInto: splitResult.orderIds.length }
+    }
+
+    // Single provider — send directly
+    const res = await _sendOrderWebhook(orderId, webhookUrl, sb)
+    revalidatePath('/pedidos')
+    return res
+}
+
 export async function createOrderFromWeb(
-    lines: { raw_text: string; quantity: number; unit?: string; master_item_id?: string; provider_id?: string }[],
-    venueId?: string | null
+    lines: { raw_text: string; quantity: number; unit?: string; master_item_id?: string; provider_id?: string; estimated_unit_price?: number }[],
+    venueId?: string | null,
+    providerNotes?: Record<string, string>
 ): Promise<ActionResult & { orderId?: string }> {
     const supabase = await createClient()
 
@@ -352,7 +389,13 @@ export async function createOrderFromWeb(
 
     const { data: order, error: orderError } = await supabase
         .from('erp_purchase_orders')
-        .insert({ tenant_id: tenantId, source_channel: 'web', status: 'draft', venue_id: venueId ?? null })
+        .insert({
+            tenant_id: tenantId,
+            source_channel: 'web',
+            status: 'draft',
+            venue_id: venueId ?? null,
+            provider_notes: providerNotes && Object.keys(providerNotes).length > 0 ? providerNotes : null,
+        })
         .select('id')
         .single()
 
@@ -368,6 +411,7 @@ export async function createOrderFromWeb(
         master_item_id: l.master_item_id ?? null,
         provider_id: l.provider_id ?? null,
         is_matched: !!(l.master_item_id),
+        estimated_unit_price: l.estimated_unit_price ?? null,
         sort_order: i,
     }))
 
@@ -445,10 +489,21 @@ export async function cancelOrder(orderId: string): Promise<ActionResult> {
     return { success: true }
 }
 
+export async function updateOrderNotes(orderId: string, notes: string | null): Promise<ActionResult> {
+    const supabase = await createClient()
+    const { error } = await (supabase as any)
+        .from('erp_purchase_orders')
+        .update({ notes: notes?.trim() || null })
+        .eq('id', orderId)
+    if (error) return { success: false, error: error.message }
+    revalidatePath(`/pedidos/${orderId}`)
+    return { success: true }
+}
+
 export async function addLinesToOrder(
     orderId: string,
-    lines: { raw_text: string; quantity: number; unit?: string; master_item_id?: string; provider_id?: string }[]
-): Promise<ActionResult> {
+    lines: { raw_text: string; quantity: number; unit?: string; master_item_id?: string; provider_id?: string; estimated_unit_price?: number }[]
+): Promise<ActionResult & { insertedIds?: string[] }> {
     const supabase = await createClient()
 
     // Get current max sort_order for this order
@@ -469,17 +524,20 @@ export async function addLinesToOrder(
         master_item_id: l.master_item_id ?? null,
         provider_id: l.provider_id ?? null,
         is_matched: !!(l.master_item_id),
+        estimated_unit_price: l.estimated_unit_price ?? null,
         sort_order: baseSort + i,
     }))
 
-    const { error } = await supabase
+    const { data, error } = await supabase
         .from('erp_purchase_order_lines')
         .insert(inserts)
+        .select('id')
 
     if (error) return { success: false, error: error.message }
 
     revalidatePath(`/pedidos/${orderId}`)
-    return { success: true }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return { success: true, insertedIds: (data as any[]).map((r) => r.id) }
 }
 
 export async function scheduleOrder(
@@ -575,29 +633,67 @@ async function recalcDeliveryStatus(supabase: any, orderId: string): Promise<voi
 
 export async function registerDelivery(
     orderId: string,
-    receivedLines: { line_id: string; qty_received: number }[]
-): Promise<ActionResult> {
+    receivedLines: { line_id: string; qty_received: number; notes?: string | null }[],
+    extras?: { raw_text: string; quantity: number; provider_id?: string | null; master_item_id?: string | null }[]
+): Promise<ActionResult & { addedLineIds?: string[] }> {
     const supabase = await createClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sb = supabase as any
 
-    const updates = receivedLines.map((l) =>
-        (supabase as any)
+    // Insert extra lines (items received that weren't in the order)
+    let addedLineIds: string[] = []
+    if (extras && extras.length > 0) {
+        const { data: existing } = await supabase
             .from('erp_purchase_order_lines')
-            .update({ qty_received: l.qty_received })
+            .select('sort_order')
+            .eq('order_id', orderId)
+            .order('sort_order', { ascending: false })
+            .limit(1)
+
+        const baseSort = (existing?.[0]?.sort_order ?? -1) + 1
+
+        const extraInserts = extras.map((e, i) => ({
+            order_id: orderId,
+            raw_text: e.raw_text,
+            quantity: e.quantity,
+            qty_received: e.quantity,
+            is_matched: !!e.master_item_id,
+            provider_id: e.provider_id ?? null,
+            master_item_id: e.master_item_id ?? null,
+            sort_order: baseSort + i,
+        }))
+
+        const { data: inserted, error: extrasErr } = await sb
+            .from('erp_purchase_order_lines')
+            .insert(extraInserts)
+            .select('id')
+
+        if (extrasErr) return { success: false, error: extrasErr.message }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        addedLineIds = (inserted as any[]).map((r) => r.id)
+    }
+
+    // Update received quantities (and optionally notes) for existing lines — sequential to avoid
+    // issues with Supabase PromiseLike objects being resolved by Promise.all in server actions
+    for (const l of receivedLines) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const patch: Record<string, any> = { qty_received: l.qty_received }
+        if (l.notes !== undefined) patch.notes = l.notes || null
+
+        const { error: updateErr } = await sb
+            .from('erp_purchase_order_lines')
+            .update(patch)
             .eq('id', l.line_id)
             .eq('order_id', orderId)
-    )
 
-    const results = await Promise.all(updates)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const failed = results.find((r: any) => r.error)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (failed) return { success: false, error: (failed as any).error.message }
+        if (updateErr) return { success: false, error: updateErr.message }
+    }
 
-    await recalcDeliveryStatus(supabase as any, orderId)
+    await recalcDeliveryStatus(sb, orderId)
 
     revalidatePath(`/pedidos/${orderId}`)
     revalidatePath('/pedidos')
-    return { success: true }
+    return { success: true, addedLineIds }
 }
 
 export async function cancelPendingLines(
@@ -646,7 +742,7 @@ export async function splitOrderByProvider(
     // Fetch original order
     const { data: order, error: orderErr } = await sb
         .from('erp_purchase_orders')
-        .select('id, tenant_id, source_channel, notes, status, is_template, provider_notes')
+        .select('id, tenant_id, source_channel, notes, status, is_template, provider_notes, venue_id')
         .eq('id', orderId)
         .single()
 
@@ -693,6 +789,7 @@ export async function splitOrderByProvider(
                 tenant_id: order.tenant_id,
                 source_channel: order.source_channel,
                 status: 'draft',
+                venue_id: order.venue_id ?? null,
                 provider_notes: childProviderNotes,
             })
             .select('id')
@@ -733,6 +830,79 @@ export async function splitOrderByProvider(
 
     revalidatePath('/pedidos')
     return { success: true, orderIds: newOrderIds }
+}
+
+export async function notifyOrderModification(orderId: string): Promise<ActionResult & { sent?: string[]; manual?: string[] }> {
+    const supabase = await createClient()
+    const sb = supabase as any
+
+    const webhookUrl = process.env.SEND_ORDER_WEBHOOK_URL
+    if (!webhookUrl) return { success: false, error: 'SEND_ORDER_WEBHOOK_URL no configurada' }
+
+    const { data: orderData } = await sb
+        .from('erp_purchase_orders')
+        .select('venue_id, provider_notes, status')
+        .eq('id', orderId)
+        .single()
+
+    if (orderData?.status !== 'sent') {
+        return { success: false, error: 'Solo se pueden notificar modificaciones de pedidos enviados' }
+    }
+
+    let emailFrom: string | null = null
+    let emailFromName: string | null = null
+    let replyToEmail: string | null = null
+    if (orderData?.venue_id) {
+        const { data: venueData } = await sb
+            .from('erp_venues')
+            .select('email_from, email_from_name, reply_to_email')
+            .eq('id', orderData.venue_id)
+            .single()
+        emailFrom = venueData?.email_from ?? null
+        emailFromName = venueData?.email_from_name ?? null
+        replyToEmail = venueData?.reply_to_email ?? null
+    }
+
+    // Fetch lines to know which providers are in this order
+    const { data: orderLines } = await sb
+        .from('erp_purchase_order_lines')
+        .select('provider_id')
+        .eq('order_id', orderId)
+        .not('provider_id', 'is', null)
+
+    const providerIds = [...new Set(((orderLines ?? []) as any[]).map((l) => l.provider_id).filter(Boolean))]
+    const existingNotes = (orderData?.provider_notes as Record<string, string>) ?? {}
+    const modLabel = '⚠️ MODIFICACIÓN DE PEDIDO — Este mensaje actualiza un pedido anterior.'
+    const modProviderNotes: Record<string, string> = {}
+    for (const pid of providerIds) {
+        const current = existingNotes[pid] ?? ''
+        modProviderNotes[pid] = current ? `${modLabel}\n\n${current}` : modLabel
+    }
+
+    try {
+        const res = await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                order_id: orderId,
+                is_modification: true,
+                provider_notes: modProviderNotes,
+                email_from: emailFrom,
+                email_from_name: emailFromName,
+                reply_to_email: replyToEmail,
+            }),
+        })
+        const rawText = await res.text()
+        if (!res.ok) return { success: false, error: `Webhook error ${res.status}: ${rawText}` }
+
+        let result: { sent?: string[]; manual?: string[] } = {}
+        try { result = rawText ? JSON.parse(rawText) : {} } catch { /* non-JSON */ }
+
+        revalidatePath(`/pedidos/${orderId}`)
+        return { success: true, sent: result.sent ?? [], manual: result.manual ?? [] }
+    } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'Error desconocido' }
+    }
 }
 
 export async function setRecurrence(

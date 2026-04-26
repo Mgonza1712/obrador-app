@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { Package, MessageCircle, Globe, ChevronRight, CheckCircle2, Clock, XCircle, Truck, PackageCheck, PackageX } from 'lucide-react'
+import { Package, MessageCircle, Globe, ChevronRight, CheckCircle2, Clock, XCircle, Truck, PackageCheck, PackageX, Filter } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import type { OrderSummary } from '@/app/actions/pedidos'
 
@@ -81,8 +81,28 @@ type Filter = 'all' | 'draft' | 'sent' | 'cancelled'
 
 export default function OrdersTable({ orders }: { orders: OrderSummary[] }) {
     const [filter, setFilter] = useState<Filter>('all')
+    const [dateFrom, setDateFrom] = useState('')
+    const [dateTo, setDateTo] = useState('')
+    const [providerFilter, setProviderFilter] = useState('all')
 
-    const filtered = filter === 'all' ? orders : orders.filter((o) => o.status === filter)
+    const allProviders = [...new Set(orders.flatMap((o) => o.providers))].sort()
+
+    const filtered = orders.filter((o) => {
+        if (filter !== 'all' && o.status !== filter) return false
+        if (dateFrom) {
+            const orderDate = new Date(o.created_at)
+            const fromDate = new Date(dateFrom)
+            if (orderDate < fromDate) return false
+        }
+        if (dateTo) {
+            const orderDate = new Date(o.created_at)
+            const toDate = new Date(dateTo)
+            toDate.setDate(toDate.getDate() + 1)
+            if (orderDate >= toDate) return false
+        }
+        if (providerFilter !== 'all' && !o.providers.includes(providerFilter)) return false
+        return true
+    })
 
     const counts = {
         all: orders.length,
@@ -107,32 +127,82 @@ export default function OrdersTable({ orders }: { orders: OrderSummary[] }) {
 
     return (
         <div className="space-y-4">
-            {/* Filter tabs */}
-            <div className="flex gap-1 rounded-lg border border-border bg-muted/30 p-1 w-fit">
-                {(['all', 'draft', 'sent', 'cancelled'] as Filter[]).map((f) => {
-                    const labels: Record<Filter, string> = {
-                        all: 'Todos',
-                        draft: 'Borrador',
-                        sent: 'Enviados',
-                        cancelled: 'Cancelados',
-                    }
-                    return (
-                        <button
-                            key={f}
-                            onClick={() => setFilter(f)}
-                            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                                filter === f
-                                    ? 'bg-background text-foreground shadow-sm'
-                                    : 'text-muted-foreground hover:text-foreground'
-                            }`}
-                        >
-                            {labels[f]}
-                            {counts[f] > 0 && (
-                                <span className="ml-1.5 text-muted-foreground">{counts[f]}</span>
-                            )}
-                        </button>
-                    )
-                })}
+            {/* Filter row */}
+            <div className="flex flex-wrap items-center gap-3">
+                {/* Status tabs */}
+                <div className="flex gap-1 rounded-lg border border-border bg-muted/30 p-1">
+                    {(['all', 'draft', 'sent', 'cancelled'] as Filter[]).map((f) => {
+                        const labels: Record<Filter, string> = {
+                            all: 'Todos',
+                            draft: 'Borrador',
+                            sent: 'Enviados',
+                            cancelled: 'Cancelados',
+                        }
+                        return (
+                            <button
+                                key={f}
+                                onClick={() => setFilter(f)}
+                                className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                                    filter === f
+                                        ? 'bg-background text-foreground shadow-sm'
+                                        : 'text-muted-foreground hover:text-foreground'
+                                }`}
+                            >
+                                {labels[f]}
+                                {counts[f] > 0 && (
+                                    <span className="ml-1.5 text-muted-foreground">{counts[f]}</span>
+                                )}
+                            </button>
+                        )
+                    })}
+                </div>
+
+                {/* Divider */}
+                <div className="h-5 w-px bg-border" />
+
+                {/* Date filters */}
+                <div className="flex items-center gap-1.5">
+                    <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                    <input
+                        type="date"
+                        value={dateFrom}
+                        onChange={(e) => setDateFrom(e.target.value)}
+                        className="h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                        title="Desde"
+                    />
+                    <span className="text-xs text-muted-foreground">—</span>
+                    <input
+                        type="date"
+                        value={dateTo}
+                        onChange={(e) => setDateTo(e.target.value)}
+                        className="h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                        title="Hasta"
+                    />
+                </div>
+
+                {/* Provider filter */}
+                {allProviders.length > 0 && (
+                    <select
+                        value={providerFilter}
+                        onChange={(e) => setProviderFilter(e.target.value)}
+                        className="h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    >
+                        <option value="all">Todos los proveedores</option>
+                        {allProviders.map((p) => (
+                            <option key={p} value={p}>{p}</option>
+                        ))}
+                    </select>
+                )}
+
+                {/* Clear filters */}
+                {(dateFrom || dateTo || providerFilter !== 'all') && (
+                    <button
+                        onClick={() => { setDateFrom(''); setDateTo(''); setProviderFilter('all') }}
+                        className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        Limpiar filtros
+                    </button>
+                )}
             </div>
 
             {/* Table */}

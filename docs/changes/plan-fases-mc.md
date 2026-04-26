@@ -1,7 +1,7 @@
 # Plan de Fases MC — Modulo de Compras Rediseñado
 
-**Fecha:** 2026-04-23 (actualizado 2026-04-24)
-**Estado:** MC-1 COMPLETA. Proximo: MC-2.
+**Fecha:** 2026-04-23 (actualizado 2026-04-26)
+**Estado:** MC-1 COMPLETA. MC-2 COMPLETA. MC-3 COMPLETA. Proximo: MC-4.
 **Referencia:** `docs/decisions/2026-04-23-modulo-compras-completo.md`
 
 ---
@@ -559,8 +559,8 @@ Mejorar el extractor con hints del pedido, extraccion de descuentos, y mejor man
 | Fase | Sesiones estimadas | Prerequisito |
 |------|-------------------|--------------|
 | MC-1 | ~~1~~ COMPLETA (2026-04-23) | — |
-| MC-2 | 1-2 | MC-1 |
-| MC-3 | 1-2 | MC-1 |
+| MC-2 | ~~1-2~~ COMPLETA (2026-04-24/26) | MC-1 |
+| MC-3 | ~~1-2~~ COMPLETA (2026-04-26) | MC-1 |
 | MC-4 | 1 | MC-2, MC-3 |
 | MC-5 | 1-2 | MC-4 |
 | MC-6 | 1-2 | MC-1 |

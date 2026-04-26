@@ -3,7 +3,7 @@
 import { useState, useTransition, useRef, useEffect } from 'react'
 import { Search, Plus, Loader2, ChevronDown, ChevronUp, MessageCircle, Mail, Globe, Phone, Star } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { addLinesToOrder } from '@/app/actions/pedidos'
+import { addLinesToOrder, updateOrderLine } from '@/app/actions/pedidos'
 import type { OrderLineDetail } from '@/app/actions/pedidos'
 import { FORMATOS_COMPRA } from '@/lib/constants'
 
@@ -21,7 +21,9 @@ interface Props {
     providers: Provider[]
     activePrices: ActivePrice[]
     aliasFormats: AliasFormat[]
+    existingLines: OrderLineDetail[]
     onAdded: (lines: OrderLineDetail[]) => void
+    onMerged: (lineId: string, newQty: number) => void
 }
 
 function ChannelIcon({ channel }: { channel: string | null }) {
@@ -85,7 +87,7 @@ function ProductCombobox({ masterItems, onSelect }: { masterItems: MasterItem[];
     )
 }
 
-export default function AddProductsPanel({ orderId, masterItems, providers, activePrices, aliasFormats, onAdded }: Props) {
+export default function AddProductsPanel({ orderId, masterItems, providers, activePrices, aliasFormats, existingLines, onAdded, onMerged }: Props) {
     const [expanded, setExpanded] = useState(false)
     const [isPending, startTransition] = useTransition()
     const [error, setError] = useState<string | null>(null)
@@ -134,38 +136,64 @@ export default function AddProductsPanel({ orderId, masterItems, providers, acti
         const priceInfo = selectedItem && pid ? activePrices.find((p) => p.master_item_id === selectedItem.id && p.provider_id === pid) ?? null : null
         const providerInfo = pid ? providers.find((p) => p.id === pid) ?? null : null
         const effectiveUnit = selectedItem && pid ? (getAliasFormat(aliasFormats, selectedItem.id, pid) ?? unit) : unit
+        const masterItemId = useRaw ? null : (selectedItem?.id ?? null)
 
-        const newLine = {
-            id: `temp-${Date.now()}`,
-            raw_text: useRaw ? rawText.trim() : selectedItem!.official_name,
-            quantity: qty,
-            unit: effectiveUnit,
-            is_matched: !useRaw && !!selectedItem,
-            provider_id: pid,
-            provider_name: providerInfo?.name ?? priceInfo?.erp_providers?.name ?? null,
-            provider_channel: providerInfo?.channel ?? priceInfo?.erp_providers?.channel ?? null,
-            provider_phone: null,
-            provider_email: null,
-            master_item_id: useRaw ? null : (selectedItem?.id ?? null),
-            master_item_name: useRaw ? null : (selectedItem?.official_name ?? null),
-            master_item_base_unit: useRaw ? null : (selectedItem?.base_unit ?? null),
-            estimated_unit_price: priceInfo?.unit_price ?? null,
-            match_confidence: null,
-            notes: null,
-            sort_order: null,
-            qty_received: 0,
-            is_cancelled: false,
+        // Deduplication: if same master_item_id + provider_id already in order, merge quantities
+        const duplicate = !useRaw && masterItemId
+            ? existingLines.find(
+                (l) => l.master_item_id === masterItemId && l.provider_id === pid && !l.is_cancelled
+            ) ?? null
+            : null
+
+        if (duplicate) {
+            const newQty = duplicate.quantity + qty
+            startTransition(async () => {
+                const res = await updateOrderLine(duplicate.id, { quantity: newQty })
+                if (res.success) {
+                    onMerged(duplicate.id, newQty)
+                    setSelectedItem(null)
+                    setSelectedProviderId(null)
+                    setQuantity('1')
+                    setUnit('Caja')
+                    setError(null)
+                } else {
+                    setError(res.error ?? 'Error al actualizar la cantidad')
+                }
+            })
+            return
         }
 
         startTransition(async () => {
             const res = await addLinesToOrder(orderId, [{
-                raw_text: newLine.raw_text,
+                raw_text: useRaw ? rawText.trim() : selectedItem!.official_name,
                 quantity: qty,
                 unit: effectiveUnit,
-                master_item_id: newLine.master_item_id ?? undefined,
+                master_item_id: masterItemId ?? undefined,
                 provider_id: pid ?? undefined,
+                estimated_unit_price: priceInfo?.unit_price ?? undefined,
             }])
-            if (res.success) {
+            if (res.success && res.insertedIds?.[0]) {
+                const newLine: OrderLineDetail = {
+                    id: res.insertedIds[0],
+                    raw_text: useRaw ? rawText.trim() : selectedItem!.official_name,
+                    quantity: qty,
+                    unit: effectiveUnit,
+                    is_matched: !useRaw && !!selectedItem,
+                    provider_id: pid,
+                    provider_name: providerInfo?.name ?? priceInfo?.erp_providers?.name ?? null,
+                    provider_channel: providerInfo?.channel ?? priceInfo?.erp_providers?.channel ?? null,
+                    provider_phone: null,
+                    provider_email: null,
+                    master_item_id: masterItemId,
+                    master_item_name: useRaw ? null : (selectedItem?.official_name ?? null),
+                    master_item_base_unit: useRaw ? null : (selectedItem?.base_unit ?? null),
+                    estimated_unit_price: priceInfo?.unit_price ?? null,
+                    match_confidence: null,
+                    notes: null,
+                    sort_order: null,
+                    qty_received: 0,
+                    is_cancelled: false,
+                }
                 onAdded([newLine])
                 setSelectedItem(null)
                 setSelectedProviderId(null)
@@ -293,7 +321,7 @@ export default function AddProductsPanel({ orderId, masterItems, providers, acti
                             <label className="mb-1 block text-xs text-muted-foreground">Cant.</label>
                             <input
                                 type="number"
-                                min="0.001"
+                                min="1"
                                 step="1"
                                 value={quantity}
                                 onChange={(e) => setQuantity(e.target.value)}

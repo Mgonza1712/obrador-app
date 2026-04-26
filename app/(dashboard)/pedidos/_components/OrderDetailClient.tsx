@@ -1,16 +1,21 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
     ArrowLeft, CheckCircle2, Clock, XCircle, MessageCircle, Globe, Mail, Phone,
     Trash2, Loader2, AlertCircle, CheckCircle, Package, AlertTriangle, RefreshCw,
     Truck, PackageCheck, PackageX, ChevronDown, ChevronUp, Scissors, MapPin,
+    Plus, FileText, MessageSquare, Send,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { deleteOrderLine, updateOrderLine, cancelOrder, registerDelivery, cancelPendingLines, markAsSent, updateProviderNotes, splitOrderByProvider, updateOrderVenue } from '@/app/actions/pedidos'
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { deleteOrderLine, updateOrderLine, cancelOrder, registerDelivery, cancelPendingLines, markAsSent, updateProviderNotes, splitOrderByProvider, updateOrderVenue, updateOrderNotes, notifyOrderModification } from '@/app/actions/pedidos'
 import SendOrderButton from './SendOrderButton'
 import UnmatchedLineRow from './UnmatchedLineRow'
 import AddProductsPanel from './AddProductsPanel'
@@ -171,7 +176,7 @@ function InlineQtyInput({ value, onChange }: { value: number; onChange: (v: numb
     }
     return (
         <input
-            type="number" min="0" step="0.001" autoFocus value={local}
+            type="number" min="0" step="1" autoFocus value={local}
             onChange={(e) => setLocal(e.target.value)}
             onBlur={() => {
                 const n = parseFloat(local)
@@ -189,76 +194,266 @@ function InlineQtyInput({ value, onChange }: { value: number; onChange: (v: numb
 
 // ── Register delivery panel ───────────────────────────────────────────────────
 
+interface ExtraItem {
+    key: string
+    provider_id: string | null
+    master_item_id: string | null
+    raw_text: string
+    quantity: string
+}
+
 function RegisterDeliveryPanel({
     lines,
     orderId,
+    masterItems,
+    activePrices,
     onSuccess,
     onClose,
 }: {
     lines: OrderLineDetail[]
     orderId: string
-    onSuccess: (updates: { line_id: string; qty_received: number }[]) => void
+    masterItems: MasterItemOption[]
+    activePrices: ActivePrice[]
+    onSuccess: (updates: { line_id: string; qty_received: number; notes: string | null }[], hadExtras: boolean) => void
     onClose: () => void
 }) {
+    const router = useRouter()
     const [received, setReceived] = useState<Record<string, string>>(
-        () => Object.fromEntries(lines.map((l) => [l.id, l.qty_received > 0 ? l.qty_received.toString() : '']))
+        () => Object.fromEntries(lines.map((l) => [l.id, Math.max(0, l.quantity - l.qty_received).toString()]))
     )
+    const [lineNotes, setLineNotes] = useState<Record<string, string>>(
+        () => Object.fromEntries(lines.map((l) => [l.id, l.notes ?? '']))
+    )
+    const [expandedNoteIds, setExpandedNoteIds] = useState<Set<string>>(
+        () => new Set(lines.filter((l) => l.notes).map((l) => l.id))
+    )
+    const [extras, setExtras] = useState<ExtraItem[]>([])
     const [isPending, startTransition] = useTransition()
+    const [error, setError] = useState<string | null>(null)
+
+    // Derive unique providers present in this delivery panel
+    const orderProviders = Array.from(
+        new Map(
+            lines
+                .filter((l) => l.provider_id)
+                .map((l) => [l.provider_id!, { id: l.provider_id!, name: l.provider_name ?? l.provider_id! }])
+        ).values()
+    )
+    const defaultProviderId = orderProviders.length === 1 ? orderProviders[0].id : null
+
+    function getProviderItems(providerId: string | null): MasterItemOption[] {
+        if (!providerId) return masterItems
+        const ids = new Set(activePrices.filter((p) => p.provider_id === providerId).map((p) => p.master_item_id))
+        return masterItems.filter((m) => ids.has(m.id))
+    }
 
     function markAll() {
-        setReceived(Object.fromEntries(lines.map((l) => [l.id, l.quantity.toString()])))
+        setReceived(Object.fromEntries(lines.map((l) => [l.id, Math.max(0, l.quantity - l.qty_received).toString()])))
+    }
+    function clearAll() { setReceived(Object.fromEntries(lines.map((l) => [l.id, '0']))) }
+
+    function toggleNote(lineId: string) {
+        setExpandedNoteIds((prev) => {
+            const next = new Set(prev)
+            if (next.has(lineId)) next.delete(lineId)
+            else next.add(lineId)
+            return next
+        })
+    }
+
+    function addExtra() {
+        setExtras((prev) => [...prev, {
+            key: `${Date.now()}`,
+            provider_id: defaultProviderId,
+            master_item_id: null,
+            raw_text: '',
+            quantity: '1',
+        }])
+    }
+
+    function removeExtra(key: string) {
+        setExtras((prev) => prev.filter((e) => e.key !== key))
     }
 
     function handleConfirm() {
         const updates = lines.map((l) => ({
             line_id: l.id,
-            qty_received: parseFloat(received[l.id] ?? '0') || 0,
+            // Accumulate: add newly received to what was already registered
+            qty_received: l.qty_received + (parseFloat(received[l.id] ?? '0') || 0),
+            notes: lineNotes[l.id]?.trim() || null,
         }))
+        const parsedExtras = extras
+            .filter((e) => e.raw_text.trim())
+            .map((e) => ({
+                raw_text: e.raw_text.trim(),
+                quantity: parseFloat(e.quantity) || 1,
+                provider_id: e.provider_id,
+                master_item_id: e.master_item_id,
+            }))
+
         startTransition(async () => {
-            const res = await registerDelivery(orderId, updates)
+            setError(null)
+            const res = await registerDelivery(orderId, updates, parsedExtras.length > 0 ? parsedExtras : undefined)
             if (res.success) {
-                onSuccess(updates)
+                onSuccess(updates, parsedExtras.length > 0)
+            } else {
+                setError(res.error ?? 'Error al registrar la recepción')
             }
         })
     }
 
     return (
-        <div className="rounded-lg border border-border bg-muted/10 p-4 space-y-3">
+        <div className="rounded-lg border border-border bg-muted/10 p-4 space-y-4">
             <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold flex items-center gap-1.5">
                     <Truck className="h-4 w-4 text-muted-foreground" />
                     Registrar recepción
                 </h3>
-                <button
-                    onClick={markAll}
-                    className="text-xs text-primary hover:underline"
-                >
-                    Marcar todo recibido
-                </button>
+                <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={clearAll} className="h-7 text-xs px-2.5">
+                        Nada recibido
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={markAll} className="h-7 text-xs px-2.5">
+                        Todo recibido
+                    </Button>
+                </div>
             </div>
+
+            {/* Lines table */}
+            <table className="w-full text-sm">
+                <thead>
+                    <tr className="border-b border-border">
+                        <th className="pb-1.5 text-left text-xs font-medium text-muted-foreground">Producto</th>
+                        <th className="pb-1.5 text-right text-xs font-medium text-muted-foreground w-20">Pendiente</th>
+                        <th className="pb-1.5 text-right text-xs font-medium text-muted-foreground w-24">A recibir</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {lines.map((l) => (
+                        <tr key={l.id} className="border-b border-border last:border-0 align-top">
+                            <td className="py-2 pr-3 min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-medium">{l.master_item_name ?? l.raw_text}</span>
+                                    {l.qty_received > 0 && (
+                                        <span className="text-xs text-muted-foreground">
+                                            ({l.qty_received}{l.unit ? ` ${l.unit}` : ''} ya recibido{l.qty_received !== 1 ? 's' : ''})
+                                        </span>
+                                    )}
+                                    <button
+                                        onClick={() => toggleNote(l.id)}
+                                        title={expandedNoteIds.has(l.id) ? 'Ocultar nota' : 'Agregar nota'}
+                                        className={`shrink-0 transition-colors ${
+                                            expandedNoteIds.has(l.id)
+                                                ? 'text-blue-500'
+                                                : 'text-muted-foreground/30 hover:text-muted-foreground'
+                                        }`}
+                                    >
+                                        <MessageSquare className="h-3.5 w-3.5" />
+                                    </button>
+                                </div>
+                                {expandedNoteIds.has(l.id) && (
+                                    <input
+                                        type="text"
+                                        value={lineNotes[l.id] ?? ''}
+                                        onChange={(e) => setLineNotes((prev) => ({ ...prev, [l.id]: e.target.value }))}
+                                        placeholder="Nota de recepción..."
+                                        autoFocus
+                                        className="mt-1 w-full rounded border border-input bg-background px-2 py-1 text-xs text-muted-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring"
+                                    />
+                                )}
+                            </td>
+                            <td className="py-2 pr-3 text-right tabular-nums text-xs text-muted-foreground w-20 shrink-0 pt-2.5">
+                                {formatQty(Math.max(0, l.quantity - l.qty_received), l.unit)}
+                            </td>
+                            <td className="py-2 text-right w-24 shrink-0 pt-2">
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="1"
+                                    value={received[l.id] ?? ''}
+                                    onChange={(e) => setReceived((prev) => ({ ...prev, [l.id]: e.target.value }))}
+                                    className="w-20 rounded border border-input bg-background px-2 py-1 text-right text-sm tabular-nums focus:outline-none focus:ring-1 focus:ring-ring"
+                                />
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+
+            {/* Extras section */}
             <div className="space-y-2">
-                {lines.map((l) => (
-                    <div key={l.id} className="flex items-center gap-3 text-sm">
-                        <span className="flex-1 min-w-0 truncate">
-                            {l.master_item_name ?? l.raw_text}
-                        </span>
-                        <span className="text-xs text-muted-foreground shrink-0">
-                            {formatQty(l.quantity, l.unit)}
-                        </span>
-                        <input
-                            type="number"
-                            min="0"
-                            max={l.quantity}
-                            step="0.001"
-                            placeholder="0"
-                            value={received[l.id] ?? ''}
-                            onChange={(e) => setReceived((prev) => ({ ...prev, [l.id]: e.target.value }))}
-                            className="w-20 shrink-0 rounded border border-input bg-background px-2 py-1 text-right text-sm tabular-nums focus:outline-none focus:ring-1 focus:ring-ring"
-                        />
-                    </div>
-                ))}
+                <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Artículos extra recibidos</span>
+                    <Button variant="outline" size="sm" onClick={addExtra} className="h-6 text-xs px-2">
+                        <Plus className="h-3 w-3 mr-1" />
+                        Añadir
+                    </Button>
+                </div>
+                {extras.length === 0 && (
+                    <p className="text-xs text-muted-foreground/60">Artículos que llegaron sin estar en el pedido.</p>
+                )}
+                {extras.map((e) => {
+                    const providerItems = getProviderItems(e.provider_id)
+                    return (
+                        <div key={e.key} className="flex items-center gap-2 flex-wrap">
+                            {orderProviders.length > 1 && (
+                                <select
+                                    value={e.provider_id ?? ''}
+                                    onChange={(ev) => setExtras((prev) => prev.map((x) => x.key === e.key
+                                        ? { ...x, provider_id: ev.target.value || null, master_item_id: null, raw_text: '' }
+                                        : x))}
+                                    className="w-32 rounded border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                                >
+                                    <option value="">Proveedor...</option>
+                                    {orderProviders.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                </select>
+                            )}
+                            <input
+                                type="text"
+                                value={e.raw_text}
+                                onChange={(ev) => {
+                                    const val = ev.target.value
+                                    const match = providerItems.find((m) => m.official_name.toLowerCase() === val.toLowerCase())
+                                    setExtras((prev) => prev.map((x) => x.key === e.key
+                                        ? { ...x, raw_text: val, master_item_id: match?.id ?? null }
+                                        : x))
+                                }}
+                                list={`items-${e.key}`}
+                                placeholder="Buscar artículo del proveedor..."
+                                className="flex-1 min-w-40 rounded border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                            />
+                            <datalist id={`items-${e.key}`}>
+                                {providerItems.map((item) => (
+                                    <option key={item.id} value={item.official_name} />
+                                ))}
+                            </datalist>
+                            <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                value={e.quantity}
+                                onChange={(ev) => setExtras((prev) => prev.map((x) => x.key === e.key ? { ...x, quantity: ev.target.value } : x))}
+                                className="w-16 rounded border border-input bg-background px-2 py-1 text-right text-sm tabular-nums focus:outline-none focus:ring-1 focus:ring-ring"
+                            />
+                            <button
+                                onClick={() => removeExtra(e.key)}
+                                className="text-muted-foreground/50 hover:text-destructive transition-colors"
+                            >
+                                <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                        </div>
+                    )
+                })}
             </div>
-            <div className="flex justify-end gap-2 pt-1">
+
+            {error && (
+                <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    {error}
+                </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-1 border-t border-border">
                 <Button variant="outline" size="sm" onClick={onClose} disabled={isPending}>
                     Cancelar
                 </Button>
@@ -275,7 +470,7 @@ function RegisterDeliveryPanel({
 function ProviderGroup({
     providerName, channel, phone, email, lines, isDraft, showDelivery,
     masterItems, providers, onDelete, onQtyChange, onLinked,
-    initialNotes, onNotesBlur,
+    initialNotes, onNotesBlur, onCancelLine,
 }: {
     providerName: string; channel: string | null; phone: string | null; email: string | null
     lines: OrderLineDetail[]; isDraft: boolean; showDelivery: boolean
@@ -285,6 +480,7 @@ function ProviderGroup({
     onLinked: (lineId: string, masterItemName: string) => void
     initialNotes: string
     onNotesBlur: (value: string) => void
+    onCancelLine?: (lineId: string) => void
 }) {
     const [localNotes, setLocalNotes] = useState(initialNotes)
     const totalEstimated = lines.reduce((sum, l) => {
@@ -304,18 +500,27 @@ function ProviderGroup({
                 )}
             </div>
             <table className="w-full text-sm">
+                <thead>
+                    <tr className="border-b border-border bg-muted/10">
+                        <th className="px-4 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Producto</th>
+                        <th className="px-4 py-2 text-right text-xs font-medium uppercase text-muted-foreground w-28">Cant. pedida</th>
+                        {showDelivery && <th className="px-4 py-2 text-right text-xs font-medium uppercase text-muted-foreground w-28">Recibido</th>}
+                        <th className="px-4 py-2 text-right text-xs font-medium uppercase text-muted-foreground w-28">P. unit est.</th>
+                        <th className="px-4 py-2 text-right text-xs font-medium uppercase text-muted-foreground w-32">Total est.</th>
+                        <th className="px-4 py-2 w-16" />
+                    </tr>
+                </thead>
                 <tbody>
                     {lines.map((line) => {
-                        const isPending = !line.is_cancelled && line.qty_received < line.quantity
+                        const lineDeliveryPending = !line.is_cancelled && line.qty_received < line.quantity
                         const isFullyReceived = !line.is_cancelled && line.qty_received >= line.quantity
-
                         return (
                             <tr
                                 key={line.id}
                                 className={`border-b border-border last:border-0 ${
                                     line.is_cancelled
                                         ? 'opacity-50 bg-muted/20'
-                                        : showDelivery && isPending
+                                        : showDelivery && lineDeliveryPending
                                             ? 'bg-amber-50/40 dark:bg-amber-950/20'
                                             : showDelivery && isFullyReceived
                                                 ? 'bg-emerald-50/40 dark:bg-emerald-950/20'
@@ -335,26 +540,23 @@ function ProviderGroup({
                                                 )}
                                             </span>
                                             {line.is_cancelled && (
-                                                <Badge variant="outline" className="text-xs border-slate-300 bg-slate-50 text-slate-500 shrink-0">
-                                                    Cancelado
-                                                </Badge>
+                                                <Badge variant="outline" className="text-xs border-slate-300 bg-slate-50 text-slate-500 shrink-0">Cancelado</Badge>
                                             )}
                                             {!line.is_matched && !line.is_cancelled && (
-                                                <Badge variant="outline" className="text-xs border-amber-300 bg-amber-50 text-amber-700 shrink-0">
-                                                    Sin vincular
-                                                </Badge>
+                                                <Badge variant="outline" className="text-xs border-amber-300 bg-amber-50 text-amber-700 shrink-0">Sin vincular</Badge>
                                             )}
                                         </div>
                                         {line.raw_text !== line.master_item_name && line.master_item_name && (
                                             <p className="mt-0.5 text-xs text-muted-foreground">&quot;{line.raw_text}&quot;</p>
                                         )}
+                                        {/* Reception note — read-only once registered */}
+                                        {line.notes && !isDraft && (
+                                            <p className="mt-1 text-xs text-muted-foreground italic">
+                                                <span className="font-medium not-italic">Nota:</span> {line.notes}
+                                            </p>
+                                        )}
                                         {!line.is_matched && isDraft && (
-                                            <UnmatchedLineRow
-                                                line={line}
-                                                masterItems={masterItems}
-                                                providers={providers}
-                                                onLinked={onLinked}
-                                            />
+                                            <UnmatchedLineRow line={line} masterItems={masterItems} providers={providers} onLinked={onLinked} />
                                         )}
                                     </div>
                                 </td>
@@ -374,10 +576,8 @@ function ProviderGroup({
                                             <span className="text-muted-foreground">—</span>
                                         ) : (
                                             <span className={
-                                                line.qty_received === 0
-                                                    ? 'text-muted-foreground'
-                                                    : isFullyReceived
-                                                        ? 'text-emerald-600 font-medium'
+                                                line.qty_received === 0 ? 'text-muted-foreground'
+                                                    : isFullyReceived ? 'text-emerald-600 font-medium'
                                                         : 'text-orange-600 font-medium'
                                             }>
                                                 {line.qty_received > 0 ? line.qty_received : '0'}
@@ -394,16 +594,28 @@ function ProviderGroup({
                                 <td className="px-4 py-3 w-32 text-right tabular-nums font-medium">
                                     {line.estimated_unit_price != null ? formatEur(line.estimated_unit_price * line.quantity) : '—'}
                                 </td>
-                                {isDraft && (
-                                    <td className="px-4 py-3 w-10">
-                                        <button
-                                            onClick={() => onDelete(line.id)}
-                                            className="text-muted-foreground hover:text-destructive transition-colors"
-                                        >
-                                            <Trash2 className="h-4 w-4" />
-                                        </button>
-                                    </td>
-                                )}
+                                <td className="px-4 py-3 w-10">
+                                    <div className="flex items-center justify-end gap-1">
+                                        {showDelivery && !line.is_cancelled && (
+                                            <button
+                                                onClick={() => onCancelLine?.(line.id)}
+                                                title="Cancelar esta línea"
+                                                className="text-muted-foreground/40 hover:text-destructive transition-colors"
+                                            >
+                                                <XCircle className="h-3.5 w-3.5" />
+                                            </button>
+                                        )}
+                                        {isDraft && (
+                                            <button
+                                                onClick={() => onDelete(line.id)}
+                                                title="Eliminar línea"
+                                                className="text-muted-foreground hover:text-destructive transition-colors"
+                                            >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                            </button>
+                                        )}
+                                    </div>
+                                </td>
                             </tr>
                         )
                     })}
@@ -450,6 +662,17 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
     const [showDeliverySection, setShowDeliverySection] = useState(true)
     const [providerNotes, setProviderNotes] = useState<Record<string, string>>(order.provider_notes ?? {})
     const [venueId, setVenueId] = useState<string | null>(order.venue_id)
+    const [confirmDialog, setConfirmDialog] = useState<{
+        title: string
+        description: string
+        onConfirm: () => void
+    } | null>(null)
+
+    // Sync client state when server sends fresh data (triggered by router.refresh())
+    useEffect(() => {
+        setLines(order.lines)
+        setDeliveryStatus(order.delivery_status as DeliveryStatus)
+    }, [order.lines, order.delivery_status])
 
     const isDraft = currentStatus === 'draft'
     const isSent = currentStatus === 'sent'
@@ -458,6 +681,37 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
     function showToast(type: 'success' | 'error', message: string) {
         setToast({ type, message })
         setTimeout(() => setToast(null), 4000)
+    }
+
+    function askConfirm(title: string, description: string, onConfirm: () => void) {
+        setConfirmDialog({ title, description, onConfirm })
+    }
+
+    function handleMerged(lineId: string, newQty: number) {
+        setLines((prev) => prev.map((l) => l.id === lineId ? { ...l, quantity: newQty } : l))
+        showToast('success', 'Cantidad actualizada')
+    }
+
+    function handleCancelLine(lineId: string) {
+        startTransition(async () => {
+            const res = await cancelPendingLines(order.id, [lineId])
+            if (res.success) {
+                setLines((prev) => {
+                    const next = prev.map((l) => l.id === lineId ? { ...l, is_cancelled: true } : l)
+                    setDeliveryStatus(calcDeliveryStatus(next))
+                    return next
+                })
+            } else {
+                showToast('error', res.error ?? 'Error al cancelar la línea')
+            }
+        })
+    }
+
+    const [orderNotes, setOrderNotes] = useState(order.notes ?? '')
+    async function handleOrderNotesBlur() {
+        const trimmed = orderNotes.trim()
+        if (trimmed === (order.notes ?? '').trim()) return
+        await updateOrderNotes(order.id, trimmed || null)
     }
 
     function handleDelete(lineId: string) {
@@ -495,46 +749,51 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
     }
 
     function handleCancel() {
-        if (!confirm('¿Cancelar este pedido? Esta acción no se puede deshacer.')) return
-        startTransition(async () => {
-            const res = await cancelOrder(order.id)
-            if (res.success) {
-                setCurrentStatus('cancelled')
-                showToast('success', 'Pedido cancelado')
-            } else {
-                showToast('error', res.error ?? 'Error al cancelar')
-            }
-        })
+        askConfirm(
+            'Cancelar pedido',
+            '¿Cancelar este pedido? Esta acción no se puede deshacer.',
+            () => startTransition(async () => {
+                const res = await cancelOrder(order.id)
+                if (res.success) {
+                    setCurrentStatus('cancelled')
+                    showToast('success', 'Pedido cancelado')
+                } else {
+                    showToast('error', res.error ?? 'Error al cancelar')
+                }
+            })
+        )
     }
 
     function handleMarkAsSent() {
-        if (!confirm('¿Marcar este pedido como enviado sin enviarlo realmente? Usá esto solo para pedidos hechos por teléfono o para pruebas.')) return
-        startTransition(async () => {
-            const res = await markAsSent(order.id)
-            if (res.success) {
-                setCurrentStatus('sent')
-                showToast('success', 'Pedido marcado como enviado')
-            } else {
-                showToast('error', res.error ?? 'Error')
-            }
-        })
+        askConfirm(
+            'Marcar como enviado',
+            'Este pedido se marcará como enviado sin enviarse realmente. Usá esto solo para pedidos hechos por teléfono o para pruebas.',
+            () => startTransition(async () => {
+                const res = await markAsSent(order.id)
+                if (res.success) {
+                    setCurrentStatus('sent')
+                    showToast('success', 'Pedido marcado como enviado')
+                } else {
+                    showToast('error', res.error ?? 'Error')
+                }
+            })
+        )
     }
 
     function handleSplitByProvider() {
         const providerCount = new Set(lines.map((l) => l.provider_id ?? '__none__')).size
-        if (!confirm(
-            `¿Separar este pedido en ${providerCount} pedidos independientes (uno por proveedor)?\n\n` +
-            `Las notas actuales se copian a cada uno como punto de partida. ` +
-            `Este borrador se eliminará.`
-        )) return
-        startTransition(async () => {
-            const res = await splitOrderByProvider(order.id)
-            if (res.success) {
-                router.push('/pedidos')
-            } else {
-                showToast('error', res.error ?? 'Error al dividir el pedido')
-            }
-        })
+        askConfirm(
+            'Separar por proveedor',
+            `Se crearán ${providerCount} pedidos independientes (uno por proveedor). Las notas actuales se copiarán a cada uno. Este borrador se eliminará.`,
+            () => startTransition(async () => {
+                const res = await splitOrderByProvider(order.id)
+                if (res.success) {
+                    router.push('/pedidos')
+                } else {
+                    showToast('error', res.error ?? 'Error al dividir el pedido')
+                }
+            })
+        )
     }
 
     async function handleVenueChange(newVenueId: string | null) {
@@ -554,17 +813,32 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
         await updateProviderNotes(order.id, providerKey, value)
     }
 
-    function handleDeliveryRegistered(updates: { line_id: string; qty_received: number }[]) {
-        setLines((prev) => {
-            const next = prev.map((l) => {
-                const u = updates.find((x) => x.line_id === l.id)
-                return u ? { ...l, qty_received: u.qty_received } : l
-            })
-            setDeliveryStatus(calcDeliveryStatus(next))
-            return next
+    function handleDeliveryRegistered(
+        updates: { line_id: string; qty_received: number; notes: string | null }[],
+        _hadExtras: boolean
+    ) {
+        // Optimistic update — immediate feedback while router.refresh() fetches fresh server data
+        const nextLines = lines.map((l) => {
+            const u = updates.find((x) => x.line_id === l.id)
+            return u ? { ...l, qty_received: u.qty_received, notes: u.notes ?? l.notes } : l
         })
+        setLines(nextLines)
+        setDeliveryStatus(calcDeliveryStatus(nextLines))
         setShowDeliveryPanel(false)
         showToast('success', 'Recepción registrada')
+        // Refresh server data — the useEffect above will sync lines/deliveryStatus from fresh order prop
+        router.refresh()
+    }
+
+    function handleNotifyModification() {
+        startTransition(async () => {
+            const res = await notifyOrderModification(order.id)
+            if (res.success) {
+                showToast('success', 'Modificación notificada al proveedor')
+            } else {
+                showToast('error', res.error ?? 'Error al notificar')
+            }
+        })
     }
 
     function handleCancelPendingLines() {
@@ -573,23 +847,25 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
             .map((l) => l.id)
         if (pendingIds.length === 0) return
 
-        if (!confirm(`¿Cancelar ${pendingIds.length} línea${pendingIds.length !== 1 ? 's' : ''} pendiente${pendingIds.length !== 1 ? 's' : ''}? Esta acción no se puede deshacer.`)) return
-
-        startTransition(async () => {
-            const res = await cancelPendingLines(order.id, pendingIds)
-            if (res.success) {
-                setLines((prev) => {
-                    const next = prev.map((l) =>
-                        pendingIds.includes(l.id) ? { ...l, is_cancelled: true } : l
-                    )
-                    setDeliveryStatus(calcDeliveryStatus(next))
-                    return next
-                })
-                showToast('success', 'Líneas pendientes canceladas')
-            } else {
-                showToast('error', res.error ?? 'Error al cancelar líneas')
-            }
-        })
+        askConfirm(
+            'Cancelar líneas pendientes',
+            `¿Cancelar ${pendingIds.length} línea${pendingIds.length !== 1 ? 's' : ''} pendiente${pendingIds.length !== 1 ? 's' : ''}? Esta acción no se puede deshacer.`,
+            () => startTransition(async () => {
+                const res = await cancelPendingLines(order.id, pendingIds)
+                if (res.success) {
+                    setLines((prev) => {
+                        const next = prev.map((l) =>
+                            pendingIds.includes(l.id) ? { ...l, is_cancelled: true } : l
+                        )
+                        setDeliveryStatus(calcDeliveryStatus(next))
+                        return next
+                    })
+                    showToast('success', 'Líneas pendientes canceladas')
+                } else {
+                    showToast('error', res.error ?? 'Error al cancelar líneas')
+                }
+            })
+        )
     }
 
     // Group lines by provider
@@ -645,12 +921,16 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                         </p>
                         {venues.length > 0 && (
                             <div className="mt-1.5 flex items-center gap-1.5">
-                                <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                <MapPin className={`h-3.5 w-3.5 shrink-0 ${isDraft && !venueId ? 'text-amber-500' : 'text-muted-foreground'}`} />
                                 {isDraft ? (
                                     <select
                                         value={venueId ?? ''}
                                         onChange={(e) => handleVenueChange(e.target.value || null)}
-                                        className="rounded border border-input bg-background px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring text-muted-foreground"
+                                        className={`rounded border px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring ${
+                                            !venueId
+                                                ? 'border-amber-400 bg-amber-50 text-amber-700 ring-amber-400 dark:bg-amber-950 dark:text-amber-300'
+                                                : 'border-input bg-background text-muted-foreground'
+                                        }`}
                                     >
                                         <option value="">Sin local asignado</option>
                                         {venues.map((v) => (
@@ -721,6 +1001,22 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                 />
             )}
 
+            {/* General order notes */}
+            <div className="rounded-lg border border-border bg-card px-4 py-3">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                    <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notas del pedido</span>
+                </div>
+                <textarea
+                    value={orderNotes}
+                    onChange={(e) => setOrderNotes(e.target.value)}
+                    onBlur={handleOrderNotesBlur}
+                    placeholder="Notas generales sobre este pedido..."
+                    rows={2}
+                    className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+            </div>
+
             {/* Unmatched warning */}
             {unmatchedCount > 0 && isDraft && (
                 <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:bg-amber-950 dark:text-amber-300">
@@ -746,7 +1042,18 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                             }
                         </span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleNotifyModification}
+                            disabled={isPending}
+                            className="text-xs"
+                            title="Re-envía el pedido al proveedor con etiqueta de modificación"
+                        >
+                            <Send className="h-3.5 w-3.5" />
+                            Notificar modificación
+                        </Button>
                         {pendingCount > 0 && (
                             <>
                                 <Button
@@ -781,6 +1088,8 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                 <RegisterDeliveryPanel
                     lines={activeLinesForDelivery.filter((l) => l.qty_received < l.quantity)}
                     orderId={order.id}
+                    masterItems={masterItems}
+                    activePrices={activePrices}
                     onSuccess={handleDeliveryRegistered}
                     onClose={() => setShowDeliveryPanel(false)}
                 />
@@ -807,20 +1116,6 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
 
                     {(!isSent || showDeliverySection) && (
                         <>
-                            <div className={`hidden sm:grid gap-x-4 px-4 text-xs font-medium uppercase text-muted-foreground ${
-                                showDelivery
-                                    ? 'sm:grid-cols-[1fr_auto_auto_auto_auto]'
-                                    : isDraft
-                                        ? 'sm:grid-cols-[1fr_auto_auto_auto_auto]'
-                                        : 'sm:grid-cols-[1fr_auto_auto_auto]'
-                            }`}>
-                                <span>Producto</span>
-                                <span className="text-right">Cant. pedida</span>
-                                {showDelivery && <span className="text-right">Recibido</span>}
-                                <span className="text-right">P. unit est.</span>
-                                <span className="text-right">Total est.</span>
-                                {isDraft && <span />}
-                            </div>
                             {Array.from(groups.entries()).map(([providerId, group]) => {
                                 const providerKey = providerId ?? '__none__'
                                 return (
@@ -840,6 +1135,7 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                                         onLinked={handleLinked}
                                         initialNotes={providerNotes[providerKey] ?? ''}
                                         onNotesBlur={(value) => handleProviderNoteBlur(providerKey, value)}
+                                        onCancelLine={handleCancelLine}
                                     />
                                 )
                             })}
@@ -848,15 +1144,17 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                 </div>
             )}
 
-            {/* Add products panel — only for drafts */}
-            {isDraft && (
+            {/* Add products panel — drafts and sent orders */}
+            {(isDraft || isSent) && (
                 <AddProductsPanel
                     orderId={order.id}
                     masterItems={masterItems}
                     providers={providers}
                     activePrices={activePrices}
                     aliasFormats={aliasFormats}
+                    existingLines={lines}
                     onAdded={handleAdded}
+                    onMerged={handleMerged}
                 />
             )}
 
@@ -876,6 +1174,25 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                     {toast.message}
                 </div>
             )}
+
+            {/* Confirm dialog */}
+            <AlertDialog open={!!confirmDialog} onOpenChange={(open) => { if (!open) setConfirmDialog(null) }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>{confirmDialog?.title}</AlertDialogTitle>
+                        <AlertDialogDescription>{confirmDialog?.description}</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={() => { confirmDialog?.onConfirm(); setConfirmDialog(null) }}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                            Confirmar
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
 
             {/* Sticky footer */}
             {isDraft && lines.length > 0 && (
@@ -898,7 +1215,7 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                             Plantilla — los envíos son automáticos
                         </div>
                     ) : (
-                        <SendOrderButton orderId={order.id} lines={lines} />
+                        <SendOrderButton orderId={order.id} lines={lines} venueId={venueId} />
                     )}
                 </div>
             )}

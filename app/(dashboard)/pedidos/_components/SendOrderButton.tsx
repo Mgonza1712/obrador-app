@@ -1,6 +1,7 @@
 'use client'
 
 import { useTransition, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Send, Loader2, CheckCircle, AlertCircle, Phone, Mail, MessageCircle, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,6 +12,7 @@ import type { OrderLineDetail } from '@/app/actions/pedidos'
 interface Props {
     orderId: string
     lines: OrderLineDetail[]
+    venueId: string | null
 }
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -120,10 +122,11 @@ function ProviderChannelRow({
     )
 }
 
-export default function SendOrderButton({ orderId, lines }: Props) {
+export default function SendOrderButton({ orderId, lines, venueId }: Props) {
+    const router = useRouter()
     const [isPending, startTransition] = useTransition()
     const [open, setOpen] = useState(false)
-    const [result, setResult] = useState<{ sent: string[]; manual: string[] } | null>(null)
+    const [result, setResult] = useState<{ sent: string[]; manual: string[]; splitInto?: number } | null>(null)
     const [error, setError] = useState<string | null>(null)
 
     // Build provider map
@@ -170,8 +173,10 @@ export default function SendOrderButton({ orderId, lines }: Props) {
         startTransition(async () => {
             const res = await sendOrder(orderId)
             if (res.success) {
-                setResult({ sent: res.sent ?? [], manual: res.manual ?? [] })
+                setResult({ sent: res.sent ?? [], manual: res.manual ?? [], splitInto: res.splitInto })
                 setError(null)
+                setOpen(false)
+                setTimeout(() => router.push('/pedidos'), 1500)
             } else {
                 setError(res.error ?? 'Error al enviar el pedido')
             }
@@ -182,7 +187,9 @@ export default function SendOrderButton({ orderId, lines }: Props) {
         return (
             <div className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-4 py-2 text-sm text-green-700 dark:bg-green-950 dark:text-green-300">
                 <CheckCircle className="h-4 w-4 shrink-0" />
-                Pedido enviado correctamente
+                {result.splitInto && result.splitInto > 1
+                    ? `Dividido en ${result.splitInto} pedidos y enviado`
+                    : 'Pedido enviado correctamente'}
                 {result.manual.length > 0 && (
                     <span className="ml-1 text-xs text-muted-foreground">
                         (Llamar manualmente a: {result.manual.join(', ')})
@@ -209,6 +216,15 @@ export default function SendOrderButton({ orderId, lines }: Props) {
                     </DialogHeader>
 
                     <div className="space-y-3 py-2">
+                        {!venueId && (
+                            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+                                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                                <span>
+                                    Este pedido no tiene local asignado. El email de envío no se puede determinar.
+                                    Asigna un local (campo <strong>Local</strong> en el encabezado del pedido) antes de enviar.
+                                </span>
+                            </div>
+                        )}
                         {providers.length === 0 ? (
                             <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700 dark:bg-amber-950 dark:text-amber-300">
                                 <AlertCircle className="h-4 w-4 shrink-0" />
@@ -246,7 +262,7 @@ export default function SendOrderButton({ orderId, lines }: Props) {
                         <Button variant="outline" onClick={() => setOpen(false)} disabled={isPending}>
                             Cancelar
                         </Button>
-                        <Button onClick={handleConfirm} disabled={isPending || providers.length === 0}>
+                        <Button onClick={handleConfirm} disabled={isPending || providers.length === 0 || !venueId}>
                             {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                             Confirmar envío
                         </Button>
