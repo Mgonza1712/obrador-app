@@ -65,14 +65,14 @@ export async function POST(
         // Storage errors are non-fatal — we still process the document
     }
 
-    // Mark order as delivered
-    if (orderId) {
+    // Photo submitted: don't mark as delivered yet.
+    // The extractor will process the document and MC-4 will update delivery_status
+    // based on actual document vs order comparison.
+    // Only add observations if provided.
+    if (orderId && observations) {
         await sb
             .from('erp_purchase_orders')
-            .update({
-                delivery_status: 'delivered',
-                ...(observations ? { notes: observations } : {}),
-            })
+            .update({ notes: observations })
             .eq('id', orderId)
 
         revalidatePath(`/pedidos/${orderId}`)

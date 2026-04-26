@@ -7,6 +7,7 @@ import { scheduleOrder, setRecurrence } from '@/app/actions/pedidos'
 
 interface Props {
     orderId: string
+    venueId: string | null
     scheduledFor: string | null
     isTemplate: boolean
     recurrenceCron: string | null
@@ -60,6 +61,7 @@ function isoToLocal(iso: string): string {
 
 export default function SchedulingPanel({
     orderId,
+    venueId,
     scheduledFor,
     isTemplate,
     recurrenceCron,
@@ -107,11 +109,17 @@ export default function SchedulingPanel({
     }
 
     function handleSaveSchedule() {
+        if (!venueId) {
+            showToast('error', 'Selecciona un local antes de programar el envío')
+            return
+        }
         startTransition(async () => {
             const isoValue = scheduledInput ? localToIso(scheduledInput) : null
             const res = await scheduleOrder(orderId, isoValue)
             if (res.success) {
                 onScheduleChange(isoValue)
+                // Server action clears recurrence — reflect in parent
+                if (isoValue) onRecurrenceChange(false, null, null, null)
                 showToast('success', isoValue ? `Programado para el ${formatDateTime(isoValue)}` : 'Programación eliminada')
             } else {
                 showToast('error', res.error ?? 'Error al programar')
@@ -133,12 +141,18 @@ export default function SchedulingPanel({
     }
 
     function handleSaveRecurrence() {
+        if (!venueId) {
+            showToast('error', 'Selecciona un local antes de activar la recurrencia')
+            return
+        }
         const cron = buildCron(selectedDays, recHour, recMinute)
         const label = buildLabel(selectedDays, recHour, recMinute)
         startTransition(async () => {
             const res = await setRecurrence(orderId, cron, label)
             if (res.success) {
                 onRecurrenceChange(true, cron, label, null)
+                // Server action clears scheduled_for — reflect in parent
+                onScheduleChange(null)
                 showToast('success', `Recurrencia activada: ${label}`)
             } else {
                 showToast('error', res.error ?? 'Error al configurar recurrencia')
@@ -187,6 +201,13 @@ export default function SchedulingPanel({
 
             {expanded && (
                 <div className="border-t border-border px-4 pb-4 pt-3 space-y-4">
+                    {/* Venue warning */}
+                    {!venueId && (
+                        <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                            Asigna un local al pedido antes de programar el envío.
+                        </div>
+                    )}
                     {/* Tab selector */}
                     <div className="flex gap-1 rounded-md border border-border bg-muted/30 p-0.5 w-fit text-xs">
                         {(['once', 'recurring'] as const).map((tab) => (

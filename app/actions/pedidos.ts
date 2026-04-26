@@ -546,9 +546,18 @@ export async function scheduleOrder(
 ): Promise<ActionResult> {
     const supabase = await createClient()
 
+    // When setting a one-time schedule, clear any active recurrence (mutual exclusion)
+    const patch: Record<string, unknown> = { scheduled_for: scheduledFor }
+    if (scheduledFor) {
+        patch.is_template = false
+        patch.recurrence_cron = null
+        patch.recurrence_label = null
+        patch.next_run_at = null
+    }
+
     const { error } = await (supabase as any)
         .from('erp_purchase_orders')
-        .update({ scheduled_for: scheduledFor })
+        .update(patch)
         .eq('id', orderId)
 
     if (error) return { success: false, error: error.message }
@@ -915,14 +924,20 @@ export async function setRecurrence(
     const isActivating = cron !== null
     const nextRunAt = isActivating ? computeNextRunAt(cron!) : null
 
+    // When activating recurrence, clear any one-time schedule (mutual exclusion)
+    const patch: Record<string, unknown> = {
+        is_template: isActivating,
+        recurrence_cron: cron,
+        recurrence_label: label,
+        next_run_at: nextRunAt,
+    }
+    if (isActivating) {
+        patch.scheduled_for = null
+    }
+
     const { error } = await (supabase as any)
         .from('erp_purchase_orders')
-        .update({
-            is_template: isActivating,
-            recurrence_cron: cron,
-            recurrence_label: label,
-            next_run_at: nextRunAt,
-        })
+        .update(patch)
         .eq('id', orderId)
 
     if (error) return { success: false, error: error.message }

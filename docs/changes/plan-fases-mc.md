@@ -1,7 +1,13 @@
 # Plan de Fases MC — Modulo de Compras Rediseñado
 
-**Fecha:** 2026-04-23 (actualizado 2026-04-26)
-**Estado:** MC-1 COMPLETA. MC-2 COMPLETA. MC-3 COMPLETA. Proximo: MC-4.
+**Fecha:** 2026-04-23 (actualizado 2026-04-27)
+**Estado:** MC-1 COMPLETA. MC-2 COMPLETA. MC-3 COMPLETA + fixes post-sesion. Proximo: MC-4.
+
+### Fixes post-MC-3 (2026-04-27)
+- **pg_cron**: `process_scheduled_orders()` + `compute_next_run_at()` instaladas en Supabase. Cron job activo cada minuto (job id 1). Requiere: `CRON_SECRET` en Vercel env + actualizar `erp_app_settings.cron_secret`.
+- **`/api/cron/send-orders`**: nuevo endpoint que recibe `order_ids`/`template_ids` desde pg_net, maneja split por proveedor y pedidos recurrentes.
+- **Scanner integrado en RecepcionClient**: reemplaza input simple con CameraCapture+PerspectiveEditor embebidos. "Escanear sin pedido" ahora abre el scanner inline (no redirige a /scan).
+- **`erp_app_settings`**: tabla nueva para configuracion interna (app_base_url = obrador.wescaleops.com, cron_secret = pendiente de configurar).
 **Referencia:** `docs/decisions/2026-04-23-modulo-compras-completo.md`
 
 ---

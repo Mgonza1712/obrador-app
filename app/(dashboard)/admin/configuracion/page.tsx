@@ -9,6 +9,17 @@ export interface VenueQR {
     reception_token: string
 }
 
+function getBaseUrl(): string {
+    // 1. Custom env var (set once in Vercel, never changes between deploys)
+    if (process.env.NEXT_PUBLIC_APP_URL) return process.env.NEXT_PUBLIC_APP_URL
+    // 2. Vercel stable production URL (system var, available automatically)
+    if (process.env.VERCEL_PROJECT_PRODUCTION_URL)
+        return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    // 3. Vercel deployment URL (changes per deploy — fallback)
+    if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`
+    return 'http://localhost:3000'
+}
+
 export default async function ConfiguracionPage() {
     const supabase = createServiceClient()
     const { data: venues } = await (supabase as any)
@@ -16,9 +27,11 @@ export default async function ConfiguracionPage() {
         .select('id, name, type, reception_token')
         .order('name')
 
-    const venueList: VenueQR[] = (venues ?? []).filter(
-        (v: any) => v.type !== 'generic' // excluir Sede Central del QR
+    const venueList: VenueQR[] = ((venues ?? []) as any[]).filter(
+        (v: any) => v.type !== 'generic'
     )
+
+    const baseUrl = getBaseUrl()
 
     return (
         <div>
@@ -30,7 +43,7 @@ export default async function ConfiguracionPage() {
                         Gestión de QR de recepción por local
                     </p>
                 </div>
-                <QRVenuesPanel venues={venueList} />
+                <QRVenuesPanel venues={venueList} baseUrl={baseUrl} />
             </div>
         </div>
     )

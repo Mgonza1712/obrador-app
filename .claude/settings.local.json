@@ -15,7 +15,11 @@
       "mcp__claude_ai_Vercel__get_runtime_logs",
       "Bash(ls \"C:/Users/maxii/OneDrive/Escritorio/WeScaleOps/obrador-app/.env\"*)",
       "Bash(npx eslint:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "mcp__claude_ai_Vercel__list_teams",
+      "mcp__claude_ai_Vercel__get_project",
+      "mcp__claude_ai_Supabase__list_extensions",
+      "Bash(npx next:*)"
     ]
   }
 }

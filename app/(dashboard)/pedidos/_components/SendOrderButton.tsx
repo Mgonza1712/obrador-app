@@ -13,6 +13,7 @@ interface Props {
     orderId: string
     lines: OrderLineDetail[]
     venueId: string | null
+    compact?: boolean
 }
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -122,7 +123,7 @@ function ProviderChannelRow({
     )
 }
 
-export default function SendOrderButton({ orderId, lines, venueId }: Props) {
+export default function SendOrderButton({ orderId, lines, venueId, compact = false }: Props) {
     const router = useRouter()
     const [isPending, startTransition] = useTransition()
     const [open, setOpen] = useState(false)
@@ -201,9 +202,15 @@ export default function SendOrderButton({ orderId, lines, venueId }: Props) {
 
     return (
         <>
-            <Button onClick={() => setOpen(true)} className="flex items-center gap-1.5">
-                <Send className="h-4 w-4" />
-                Enviar pedido
+            <Button
+                onClick={() => setOpen(true)}
+                size={compact ? 'sm' : 'default'}
+                variant={compact ? 'outline' : 'default'}
+                className={compact ? 'ml-auto shrink-0 border-amber-400 text-amber-800 hover:bg-amber-100' : 'flex items-center gap-1.5'}
+            >
+                <Send className="h-3.5 w-3.5" />
+                {!compact && 'Enviar pedido'}
+                {compact && 'Enviar ahora'}
             </Button>
 
             <Dialog open={open} onOpenChange={setOpen}>

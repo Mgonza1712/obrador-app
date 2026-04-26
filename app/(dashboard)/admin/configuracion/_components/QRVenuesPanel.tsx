@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -9,15 +9,10 @@ import type { VenueQR } from '../page'
 
 interface Props {
     venues: VenueQR[]
+    baseUrl: string
 }
 
-export default function QRVenuesPanel({ venues }: Props) {
-    const [origin, setOrigin] = useState('')
-
-    useEffect(() => {
-        setOrigin(window.location.origin)
-    }, [])
-
+export default function QRVenuesPanel({ venues, baseUrl }: Props) {
     if (venues.length === 0) {
         return (
             <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
@@ -37,18 +32,18 @@ export default function QRVenuesPanel({ venues }: Props) {
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {venues.map((venue) => (
-                    <VenueQRCard key={venue.id} venue={venue} origin={origin} />
+                    <VenueQRCard key={venue.id} venue={venue} baseUrl={baseUrl} />
                 ))}
             </div>
         </div>
     )
 }
 
-function VenueQRCard({ venue, origin }: { venue: VenueQR; origin: string }) {
+function VenueQRCard({ venue, baseUrl }: { venue: VenueQR; baseUrl: string }) {
     const wrapperRef = useRef<HTMLDivElement>(null)
     const [copied, setCopied] = useState(false)
 
-    const url = origin ? `${origin}/recepcion/${venue.reception_token}` : ''
+    const url = `${baseUrl}/recepcion/${venue.reception_token}`
 
     function handleDownload() {
         // qrcode.react renders a <canvas> inside a wrapper div
@@ -91,29 +86,21 @@ function VenueQRCard({ venue, origin }: { venue: VenueQR; origin: string }) {
 
             {/* QR code */}
             <div className="flex justify-center">
-                {url ? (
-                    <div ref={wrapperRef}>
-                        <QRCodeCanvas
-                            value={url}
-                            size={180}
-                            level="M"
-                            marginSize={2}
-                            style={{ display: 'block' }}
-                        />
-                    </div>
-                ) : (
-                    <div className="flex h-[180px] w-[180px] items-center justify-center rounded-md bg-muted">
-                        <QrCode className="h-8 w-8 text-muted-foreground opacity-40" />
-                    </div>
-                )}
+                <div ref={wrapperRef}>
+                    <QRCodeCanvas
+                        value={url}
+                        size={180}
+                        level="M"
+                        marginSize={2}
+                        style={{ display: 'block' }}
+                    />
+                </div>
             </div>
 
             {/* URL */}
-            {url && (
-                <p className="break-all rounded bg-muted px-2 py-1.5 text-xs text-muted-foreground font-mono">
-                    {url}
-                </p>
-            )}
+            <p className="break-all rounded bg-muted px-2 py-1.5 text-xs text-muted-foreground font-mono">
+                {url}
+            </p>
 
             {/* Actions */}
             <div className="flex gap-2">
@@ -122,7 +109,6 @@ function VenueQRCard({ venue, origin }: { venue: VenueQR; origin: string }) {
                     size="sm"
                     className="flex-1"
                     onClick={handleDownload}
-                    disabled={!url}
                 >
                     <Download className="mr-1.5 h-3.5 w-3.5" />
                     Descargar PNG
@@ -131,7 +117,6 @@ function VenueQRCard({ venue, origin }: { venue: VenueQR; origin: string }) {
                     variant="outline"
                     size="sm"
                     onClick={handleCopy}
-                    disabled={!url}
                     className="shrink-0"
                     title="Copiar enlace"
                 >
@@ -141,19 +126,17 @@ function VenueQRCard({ venue, origin }: { venue: VenueQR; origin: string }) {
                         <Copy className="h-3.5 w-3.5" />
                     )}
                 </Button>
-                {url && (
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        asChild
-                        className="shrink-0"
-                        title="Abrir en nueva pestaña"
-                    >
-                        <a href={url} target="_blank" rel="noopener noreferrer">
-                            <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
-                    </Button>
-                )}
+                <Button
+                    variant="outline"
+                    size="sm"
+                    asChild
+                    className="shrink-0"
+                    title="Abrir en nueva pestaña"
+                >
+                    <a href={url} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                </Button>
             </div>
         </div>
     )

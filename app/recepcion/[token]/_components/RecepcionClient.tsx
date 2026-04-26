@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import {
     Package,
     Camera,
+    Upload,
     ChevronLeft,
     CheckCircle,
     AlertCircle,
@@ -18,10 +19,15 @@ import {
 } from 'lucide-react'
 import type { VenueInfo, PendingOrder, PendingOrderLine } from '@/app/actions/recepcion'
 import { anonRegisterDelivery } from '@/app/actions/recepcion'
+import { CameraCapture } from '@/app/scan/components/CameraCapture'
+import { PerspectiveEditor } from '@/app/scan/components/PerspectiveEditor'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Step = 'orders' | 'reception' | 'manual-qty' | 'success' | 'error'
+type Step = 'orders' | 'reception' | 'no-order-confirm' | 'manual-qty' | 'success' | 'error'
+
+/** null = scanner closed; 'order' = scanning for a selected order; 'no-order' = scanning without linked order */
+type ScanContext = 'order' | 'no-order' | null
 
 type DocType = 'albaran' | 'factura' | 'ticket' | 'otro'
 
@@ -32,6 +38,15 @@ const DOC_TYPES: { value: DocType; label: string }[] = [
     { value: 'otro', label: 'No sé' },
 ]
 
+function dataUrlToFile(dataUrl: string, filename: string): File {
+    const arr = dataUrl.split(',')
+    const mime = arr[0].match(/:(.*?);/)?.[1] ?? 'image/jpeg'
+    const bstr = atob(arr[1])
+    const u8arr = new Uint8Array(bstr.length)
+    for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i)
+    return new File([u8arr], filename, { type: mime })
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface Props {
@@ -41,17 +56,21 @@ interface Props {
 }
 
 export default function RecepcionClient({ token, venue, initialOrders }: Props) {
-    const [step, setStep] = useState<Step>('orders')
+    const [step, setStep]                   = useState<Step>('orders')
     const [selectedOrder, setSelectedOrder] = useState<PendingOrder | null>(null)
-    const [docType, setDocType] = useState<DocType>('albaran')
-    const [photo, setPhoto] = useState<File | null>(null)
-    const [photoPreview, setPhotoPreview] = useState<string | null>(null)
-    const [observations, setObservations] = useState('')
-    const [manualQtys, setManualQtys] = useState<Record<string, number>>({})
-    const [successMsg, setSuccessMsg] = useState('')
-    const [errorMsg, setErrorMsg] = useState('')
-    const [isPending, startTransition] = useTransition()
-    const [isSubmitting, setIsSubmitting] = useState(false)
+    const [docType, setDocType]             = useState<DocType>('albaran')
+    const [photo, setPhoto]                 = useState<File | null>(null)
+    const [photoPreview, setPhotoPreview]   = useState<string | null>(null)
+    const [observations, setObservations]   = useState('')
+    const [manualQtys, setManualQtys]       = useState<Record<string, number>>({})
+    const [successMsg, setSuccessMsg]       = useState('')
+    const [errorMsg, setErrorMsg]           = useState('')
+    const [isPending, startTransition]      = useTransition()
+    const [isSubmitting, setIsSubmitting]   = useState(false)
+
+    // ── Scanner state ─────────────────────────────────────────────────────────
+    const [scanContext, setScanContext]       = useState<ScanContext>(null)
+    const [scanRawCapture, setScanRawCapture] = useState<string | null>(null)
 
     const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -66,27 +85,43 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         setStep('reception')
     }
 
-    function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    function handleOpenScanner(ctx: ScanContext) {
+        setScanRawCapture(null)
+        setScanContext(ctx)
+    }
+
+    function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.target.files?.[0]
         if (!file) return
         setPhoto(file)
-        const url = URL.createObjectURL(file)
-        setPhotoPreview(url)
+        setPhotoPreview(URL.createObjectURL(file))
+    }
+
+    // Called when PerspectiveEditor confirms the corrected image
+    function handlePerspectiveConfirm(processedDataUrl: string, ctx: ScanContext) {
+        const file = dataUrlToFile(processedDataUrl, `scan_${Date.now()}.jpg`)
+        setPhoto(file)
+        setPhotoPreview(processedDataUrl)
+        setScanRawCapture(null)
+        setScanContext(null)
+
+        if (ctx === 'no-order') {
+            setStep('no-order-confirm')
+        }
+        // For 'order' context the user is already in the 'reception' step
     }
 
     function handleGoManual() {
         if (!selectedOrder) return
-        // Pre-fill with remaining quantity per line
         const qtys: Record<string, number> = {}
         for (const l of selectedOrder.lines) {
-            const remaining = Math.max(0, l.quantity - l.qty_received)
-            qtys[l.id] = remaining
+            qtys[l.id] = Math.max(0, l.quantity - l.qty_received)
         }
         setManualQtys(qtys)
         setStep('manual-qty')
     }
 
-    // Photo + doc type submission (via API route to handle large files)
+    // Photo submission (works for both order and no-order flows)
     async function handleSubmitRecepcion() {
         setIsSubmitting(true)
         setErrorMsg('')
@@ -110,11 +145,10 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                 return
             }
 
-            const hasPhoto = !!photo
             setSuccessMsg(
-                hasPhoto
-                    ? 'Recepción confirmada. El documento se procesará automáticamente en unos minutos.'
-                    : 'Recepción registrada correctamente.'
+                photo
+                    ? 'Foto enviada correctamente. El documento se procesará en unos minutos y las cantidades se actualizarán automáticamente.'
+                    : 'Observaciones registradas.'
             )
             setStep('success')
         } catch {
@@ -125,7 +159,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         }
     }
 
-    // Manual qty submission (no photo, Server Action)
+    // Manual qty submission (Server Action)
     function handleSubmitManual() {
         if (!selectedOrder) return
         const received = Object.entries(manualQtys).map(([line_id, qty_received]) => ({
@@ -158,9 +192,36 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         setManualQtys({})
         setErrorMsg('')
         setSuccessMsg('')
+        setScanContext(null)
+        setScanRawCapture(null)
     }
 
-    // ── Render ────────────────────────────────────────────────────────────────
+    // ── Scanner overlay (full-screen, takes over the whole render) ────────────
+
+    if (scanContext !== null) {
+        if (scanRawCapture === null) {
+            // Step 1: Live camera
+            return (
+                <CameraCapture
+                    onCapture={(dataUrl) => setScanRawCapture(dataUrl)}
+                    onCancel={() => setScanContext(null)}
+                />
+            )
+        }
+        // Step 2: Perspective correction
+        const ctx = scanContext // capture for closure
+        return (
+            <div className="fixed inset-0 z-40 bg-background flex flex-col">
+                <PerspectiveEditor
+                    imageDataUrl={scanRawCapture}
+                    onConfirm={(processed) => handlePerspectiveConfirm(processed, ctx)}
+                    onRetake={() => setScanRawCapture(null)}
+                />
+            </div>
+        )
+    }
+
+    // ── Normal UI ─────────────────────────────────────────────────────────────
 
     return (
         <div className="mx-auto max-w-md px-4 py-6">
@@ -173,11 +234,21 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                 <p className="mt-0.5 text-sm text-muted-foreground">Recepción de mercancía</p>
             </div>
 
+            {/* Hidden file input for gallery uploads */}
+            <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleFileChange}
+            />
+
             {/* Views */}
             {step === 'orders' && (
                 <OrdersView
                     orders={initialOrders}
                     onSelectOrder={handleSelectOrder}
+                    onScanWithoutOrder={() => handleOpenScanner('no-order')}
                 />
             )}
 
@@ -188,13 +259,31 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                     setDocType={setDocType}
                     photoPreview={photoPreview}
                     fileInputRef={fileInputRef}
-                    onPhotoChange={handlePhotoChange}
+                    onOpenScanner={() => handleOpenScanner('order')}
                     observations={observations}
                     setObservations={setObservations}
                     isSubmitting={isSubmitting}
                     onBack={() => setStep('orders')}
                     onSubmit={handleSubmitRecepcion}
                     onGoManual={handleGoManual}
+                />
+            )}
+
+            {step === 'no-order-confirm' && (
+                <NoOrderConfirmView
+                    docType={docType}
+                    setDocType={setDocType}
+                    photoPreview={photoPreview}
+                    observations={observations}
+                    setObservations={setObservations}
+                    isSubmitting={isSubmitting}
+                    onBack={() => {
+                        setStep('orders')
+                        setPhoto(null)
+                        setPhotoPreview(null)
+                    }}
+                    onRetakePhoto={() => handleOpenScanner('no-order')}
+                    onSubmit={handleSubmitRecepcion}
                 />
             )}
 
@@ -216,7 +305,10 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
             )}
 
             {step === 'error' && (
-                <ErrorView message={errorMsg} onRetry={() => setStep(selectedOrder ? 'reception' : 'orders')} />
+                <ErrorView
+                    message={errorMsg}
+                    onRetry={() => setStep(selectedOrder ? 'reception' : 'orders')}
+                />
             )}
         </div>
     )
@@ -227,9 +319,11 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
 function OrdersView({
     orders,
     onSelectOrder,
+    onScanWithoutOrder,
 }: {
     orders: PendingOrder[]
     onSelectOrder: (o: PendingOrder) => void
+    onScanWithoutOrder: () => void
 }) {
     return (
         <div className="space-y-4">
@@ -254,13 +348,13 @@ function OrdersView({
             )}
 
             <div className="mt-6 border-t pt-4">
-                <a
-                    href="/scan"
-                    className="flex items-center justify-center gap-2 rounded-md border px-4 py-3 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors"
+                <button
+                    onClick={onScanWithoutOrder}
+                    className="flex w-full items-center justify-center gap-2 rounded-md border px-4 py-3 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors"
                 >
                     <ScanLine className="h-4 w-4" />
                     Escanear documento sin pedido
-                </a>
+                </button>
             </div>
         </div>
     )
@@ -293,11 +387,7 @@ function OrderCard({
                 </div>
                 <DeliveryBadge status={order.delivery_status} />
             </div>
-            <Button
-                className="mt-3 w-full"
-                size="sm"
-                onClick={() => onSelect(order)}
-            >
+            <Button className="mt-3 w-full" size="sm" onClick={() => onSelect(order)}>
                 Recibir
             </Button>
         </div>
@@ -319,7 +409,69 @@ function DeliveryBadge({ status }: { status: string }) {
     )
 }
 
-// ─── Reception view ───────────────────────────────────────────────────────────
+// ─── Shared: photo capture section ────────────────────────────────────────────
+
+function PhotoCaptureSection({
+    photoPreview,
+    fileInputRef,
+    onOpenScanner,
+}: {
+    photoPreview: string | null
+    fileInputRef: React.RefObject<HTMLInputElement | null>
+    onOpenScanner: () => void
+}) {
+    if (photoPreview) {
+        return (
+            <div className="space-y-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                    src={photoPreview}
+                    alt="Vista previa"
+                    className="w-full rounded-lg border object-cover"
+                    style={{ maxHeight: 200 }}
+                />
+                <div className="grid grid-cols-2 gap-2">
+                    <Button variant="outline" size="sm" className="w-full" onClick={onOpenScanner}>
+                        <Camera className="mr-2 h-4 w-4" />
+                        Repetir foto
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => fileInputRef.current?.click()}
+                    >
+                        <Upload className="mr-2 h-4 w-4" />
+                        Cambiar
+                    </Button>
+                </div>
+            </div>
+        )
+    }
+
+    return (
+        <div className="grid grid-cols-2 gap-3">
+            <Button
+                variant="outline"
+                className="flex-col h-20 gap-2 border-dashed"
+                onClick={onOpenScanner}
+            >
+                <Camera className="h-6 w-6" />
+                <span className="text-xs">Cámara</span>
+            </Button>
+            <Button
+                variant="outline"
+                className="flex-col h-20 gap-2 border-dashed"
+                onClick={() => fileInputRef.current?.click()}
+            >
+                <Upload className="h-6 w-6" />
+                <span className="text-xs">Galería</span>
+            </Button>
+        </div>
+    )
+}
+
+// ─── Reception view (selected order) ─────────────────────────────────────────
 
 function ReceptionView({
     order,
@@ -327,7 +479,7 @@ function ReceptionView({
     setDocType,
     photoPreview,
     fileInputRef,
-    onPhotoChange,
+    onOpenScanner,
     observations,
     setObservations,
     isSubmitting,
@@ -340,7 +492,7 @@ function ReceptionView({
     setDocType: (d: DocType) => void
     photoPreview: string | null
     fileInputRef: React.RefObject<HTMLInputElement | null>
-    onPhotoChange: (e: React.ChangeEvent<HTMLInputElement>) => void
+    onOpenScanner: () => void
     observations: string
     setObservations: (v: string) => void
     isSubmitting: boolean
@@ -352,7 +504,6 @@ function ReceptionView({
 
     return (
         <div className="space-y-5">
-            {/* Back + title */}
             <div>
                 <button
                     onClick={onBack}
@@ -401,46 +552,14 @@ function ReceptionView({
                 </div>
             </div>
 
-            {/* Photo upload */}
+            {/* Photo */}
             <div>
                 <Label className="mb-2 block text-sm">Foto del documento</Label>
-                <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="hidden"
-                    onChange={onPhotoChange}
+                <PhotoCaptureSection
+                    photoPreview={photoPreview}
+                    fileInputRef={fileInputRef}
+                    onOpenScanner={onOpenScanner}
                 />
-                {photoPreview ? (
-                    <div className="space-y-2">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                            src={photoPreview}
-                            alt="Vista previa"
-                            className="w-full rounded-lg border object-cover"
-                            style={{ maxHeight: 200 }}
-                        />
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            className="w-full"
-                            onClick={() => fileInputRef.current?.click()}
-                        >
-                            <Camera className="mr-2 h-4 w-4" />
-                            Cambiar foto
-                        </Button>
-                    </div>
-                ) : (
-                    <Button
-                        variant="outline"
-                        className="w-full py-8 border-dashed"
-                        onClick={() => fileInputRef.current?.click()}
-                    >
-                        <Camera className="mr-2 h-5 w-5" />
-                        Tomar o subir foto
-                    </Button>
-                )}
             </div>
 
             {/* Observations */}
@@ -457,13 +576,7 @@ function ReceptionView({
                 />
             </div>
 
-            {/* Submit */}
-            <Button
-                className="w-full"
-                size="lg"
-                onClick={onSubmit}
-                disabled={isSubmitting}
-            >
+            <Button className="w-full" size="lg" onClick={onSubmit} disabled={isSubmitting}>
                 {isSubmitting ? (
                     <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -474,16 +587,116 @@ function ReceptionView({
                 )}
             </Button>
 
-            {/* Manual qty fallback */}
             <p className="text-center text-sm text-muted-foreground">
                 ¿No llegó documento?{' '}
-                <button
-                    onClick={onGoManual}
-                    className="underline hover:text-foreground"
-                >
+                <button onClick={onGoManual} className="underline hover:text-foreground">
                     Registrar cantidades manualmente
                 </button>
             </p>
+        </div>
+    )
+}
+
+// ─── No-order confirm view ────────────────────────────────────────────────────
+
+function NoOrderConfirmView({
+    docType,
+    setDocType,
+    photoPreview,
+    observations,
+    setObservations,
+    isSubmitting,
+    onBack,
+    onRetakePhoto,
+    onSubmit,
+}: {
+    docType: DocType
+    setDocType: (d: DocType) => void
+    photoPreview: string | null
+    observations: string
+    setObservations: (v: string) => void
+    isSubmitting: boolean
+    onBack: () => void
+    onRetakePhoto: () => void
+    onSubmit: () => void
+}) {
+    return (
+        <div className="space-y-5">
+            <div>
+                <button
+                    onClick={onBack}
+                    className="mb-3 flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+                >
+                    <ChevronLeft className="h-4 w-4" />
+                    Volver
+                </button>
+                <h2 className="font-semibold">Escanear sin pedido</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                    El documento se procesará y vinculará manualmente desde el panel.
+                </p>
+            </div>
+
+            {/* Photo preview */}
+            {photoPreview && (
+                <div className="space-y-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                        src={photoPreview}
+                        alt="Documento escaneado"
+                        className="w-full rounded-lg border object-cover"
+                        style={{ maxHeight: 220 }}
+                    />
+                    <Button variant="outline" size="sm" className="w-full" onClick={onRetakePhoto}>
+                        <Camera className="mr-2 h-4 w-4" />
+                        Repetir foto
+                    </Button>
+                </div>
+            )}
+
+            {/* Document type */}
+            <div>
+                <Label className="mb-2 block text-sm">Tipo de documento</Label>
+                <div className="grid grid-cols-4 gap-1">
+                    {DOC_TYPES.map((dt) => (
+                        <button
+                            key={dt.value}
+                            onClick={() => setDocType(dt.value)}
+                            className={`rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
+                                docType === dt.value
+                                    ? 'border-primary bg-primary text-primary-foreground'
+                                    : 'border-border bg-background text-muted-foreground hover:border-primary/50'
+                            }`}
+                        >
+                            {dt.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {/* Observations */}
+            <div>
+                <Label htmlFor="obs-noorder" className="mb-2 block text-sm">
+                    Observaciones <span className="text-muted-foreground">(opcional)</span>
+                </Label>
+                <Textarea
+                    id="obs-noorder"
+                    placeholder="Ej: llegó sin pedido previo, proveedor X..."
+                    value={observations}
+                    onChange={(e) => setObservations(e.target.value)}
+                    rows={3}
+                />
+            </div>
+
+            <Button className="w-full" size="lg" onClick={onSubmit} disabled={isSubmitting || !photoPreview}>
+                {isSubmitting ? (
+                    <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Enviando...
+                    </>
+                ) : (
+                    'Enviar documento'
+                )}
+            </Button>
         </div>
     )
 }
@@ -496,7 +709,10 @@ function OrderLineRow({ line }: { line: PendingOrderLine }) {
             <span className="min-w-0 flex-1 truncate">{line.raw_text}</span>
             <span className="shrink-0 text-muted-foreground">
                 {remaining > 0 ? (
-                    <>{remaining}{unit} pendiente{remaining !== 1 ? 's' : ''}</>
+                    <>
+                        {remaining}
+                        {unit} pendiente{remaining !== 1 ? 's' : ''}
+                    </>
                 ) : (
                     <span className="text-green-600">Recibido</span>
                 )}
@@ -558,8 +774,7 @@ function ManualQtyView({
                             <div className="flex items-center gap-3">
                                 <div className="flex-1">
                                     <Label className="mb-1 block text-xs text-muted-foreground">
-                                        Cantidad recibida
-                                        {line.unit ? ` (${line.unit})` : ''}
+                                        Cantidad recibida{line.unit ? ` (${line.unit})` : ''}
                                     </Label>
                                     <Input
                                         type="number"
@@ -574,7 +789,8 @@ function ManualQtyView({
                                 <div className="text-right text-xs text-muted-foreground">
                                     <p>Pedido</p>
                                     <p className="font-medium">
-                                        {line.quantity}{line.unit ? ` ${line.unit}` : ''}
+                                        {line.quantity}
+                                        {line.unit ? ` ${line.unit}` : ''}
                                     </p>
                                 </div>
                             </div>
@@ -596,12 +812,7 @@ function ManualQtyView({
                 />
             </div>
 
-            <Button
-                className="w-full"
-                size="lg"
-                onClick={onSubmit}
-                disabled={isPending}
-            >
+            <Button className="w-full" size="lg" onClick={onSubmit} disabled={isPending}>
                 {isPending ? (
                     <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
