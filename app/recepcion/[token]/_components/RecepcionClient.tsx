@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
@@ -16,6 +17,7 @@ import {
     Loader2,
     ClipboardList,
     ScanLine,
+    X,
 } from 'lucide-react'
 import type { VenueInfo, PendingOrder, PendingOrderLine } from '@/app/actions/recepcion'
 import { anonRegisterDelivery } from '@/app/actions/recepcion'
@@ -56,6 +58,8 @@ interface Props {
 }
 
 export default function RecepcionClient({ token, venue, initialOrders }: Props) {
+    const router = useRouter()
+
     const [step, setStep]                   = useState<Step>('orders')
     const [selectedOrder, setSelectedOrder] = useState<PendingOrder | null>(null)
     const [docType, setDocType]             = useState<DocType>('albaran')
@@ -67,6 +71,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     const [errorMsg, setErrorMsg]           = useState('')
     const [isPending, startTransition]      = useTransition()
     const [isSubmitting, setIsSubmitting]   = useState(false)
+    const [lightboxSrc, setLightboxSrc]     = useState<string | null>(null)
 
     // ── Scanner state ─────────────────────────────────────────────────────────
     const [scanContext, setScanContext]       = useState<ScanContext>(null)
@@ -194,6 +199,32 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         setSuccessMsg('')
         setScanContext(null)
         setScanRawCapture(null)
+        router.refresh()
+    }
+
+    // ── Lightbox overlay ──────────────────────────────────────────────────────
+
+    if (lightboxSrc) {
+        return (
+            <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/90"
+                onClick={() => setLightboxSrc(null)}
+            >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                    src={lightboxSrc}
+                    alt="Vista completa"
+                    className="max-w-full max-h-full object-contain p-4"
+                    onClick={(e) => e.stopPropagation()}
+                />
+                <button
+                    className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white"
+                    onClick={() => setLightboxSrc(null)}
+                >
+                    <X className="h-5 w-5" />
+                </button>
+            </div>
+        )
     }
 
     // ── Scanner overlay (full-screen, takes over the whole render) ────────────
@@ -260,6 +291,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                     photoPreview={photoPreview}
                     fileInputRef={fileInputRef}
                     onOpenScanner={() => handleOpenScanner('order')}
+                    onOpenLightbox={setLightboxSrc}
                     observations={observations}
                     setObservations={setObservations}
                     isSubmitting={isSubmitting}
@@ -274,6 +306,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                     docType={docType}
                     setDocType={setDocType}
                     photoPreview={photoPreview}
+                    onOpenLightbox={setLightboxSrc}
                     observations={observations}
                     setObservations={setObservations}
                     isSubmitting={isSubmitting}
@@ -415,24 +448,24 @@ function PhotoCaptureSection({
     photoPreview,
     fileInputRef,
     onOpenScanner,
+    onOpenLightbox,
 }: {
     photoPreview: string | null
     fileInputRef: React.RefObject<HTMLInputElement | null>
     onOpenScanner: () => void
+    onOpenLightbox: (src: string) => void
 }) {
     if (photoPreview) {
         return (
             <div className="space-y-2">
-                {/* Tap to open full-screen */}
-                <a href={photoPreview} target="_blank" rel="noreferrer">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                        src={photoPreview}
-                        alt="Vista previa — toca para ver completa"
-                        className="w-full rounded-lg border object-contain bg-muted/30"
-                        style={{ maxHeight: 240 }}
-                    />
-                </a>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                    src={photoPreview}
+                    alt="Vista previa — toca para ver completa"
+                    className="w-full cursor-pointer rounded-lg border object-contain bg-muted/30"
+                    style={{ maxHeight: 240 }}
+                    onClick={() => onOpenLightbox(photoPreview)}
+                />
                 <p className="text-center text-xs text-muted-foreground">Toca la imagen para verla completa</p>
                 <div className="grid grid-cols-2 gap-2">
                     <Button variant="outline" size="sm" className="w-full" onClick={onOpenScanner}>
@@ -484,6 +517,7 @@ function ReceptionView({
     photoPreview,
     fileInputRef,
     onOpenScanner,
+    onOpenLightbox,
     observations,
     setObservations,
     isSubmitting,
@@ -497,6 +531,7 @@ function ReceptionView({
     photoPreview: string | null
     fileInputRef: React.RefObject<HTMLInputElement | null>
     onOpenScanner: () => void
+    onOpenLightbox: (src: string) => void
     observations: string
     setObservations: (v: string) => void
     isSubmitting: boolean
@@ -563,6 +598,7 @@ function ReceptionView({
                     photoPreview={photoPreview}
                     fileInputRef={fileInputRef}
                     onOpenScanner={onOpenScanner}
+                    onOpenLightbox={onOpenLightbox}
                 />
             </div>
 
@@ -607,6 +643,7 @@ function NoOrderConfirmView({
     docType,
     setDocType,
     photoPreview,
+    onOpenLightbox,
     observations,
     setObservations,
     isSubmitting,
@@ -617,6 +654,7 @@ function NoOrderConfirmView({
     docType: DocType
     setDocType: (d: DocType) => void
     photoPreview: string | null
+    onOpenLightbox: (src: string) => void
     observations: string
     setObservations: (v: string) => void
     isSubmitting: boolean
@@ -643,15 +681,14 @@ function NoOrderConfirmView({
             {/* Photo preview */}
             {photoPreview && (
                 <div className="space-y-2">
-                    <a href={photoPreview} target="_blank" rel="noreferrer">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                            src={photoPreview}
-                            alt="Documento escaneado — toca para ver completo"
-                            className="w-full rounded-lg border object-contain bg-muted/30"
-                            style={{ maxHeight: 260 }}
-                        />
-                    </a>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                        src={photoPreview}
+                        alt="Documento escaneado — toca para ver completo"
+                        className="w-full cursor-pointer rounded-lg border object-contain bg-muted/30"
+                        style={{ maxHeight: 260 }}
+                        onClick={() => onOpenLightbox(photoPreview)}
+                    />
                     <p className="text-center text-xs text-muted-foreground">Toca la imagen para verla completa</p>
                     <Button variant="outline" size="sm" className="w-full" onClick={onRetakePhoto}>
                         <Camera className="mr-2 h-4 w-4" />
