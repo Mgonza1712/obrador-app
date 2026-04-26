@@ -224,7 +224,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     // ── Normal UI ─────────────────────────────────────────────────────────────
 
     return (
-        <div className="mx-auto max-w-md px-4 py-6">
+        <div className="mx-auto max-w-md px-4 py-6 pb-12">
             {/* Header */}
             <div className="mb-6">
                 <div className="flex items-center gap-2">
@@ -423,13 +423,17 @@ function PhotoCaptureSection({
     if (photoPreview) {
         return (
             <div className="space-y-2">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                    src={photoPreview}
-                    alt="Vista previa"
-                    className="w-full rounded-lg border object-cover"
-                    style={{ maxHeight: 200 }}
-                />
+                {/* Tap to open full-screen */}
+                <a href={photoPreview} target="_blank" rel="noreferrer">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                        src={photoPreview}
+                        alt="Vista previa — toca para ver completa"
+                        className="w-full rounded-lg border object-contain bg-muted/30"
+                        style={{ maxHeight: 240 }}
+                    />
+                </a>
+                <p className="text-center text-xs text-muted-foreground">Toca la imagen para verla completa</p>
                 <div className="grid grid-cols-2 gap-2">
                     <Button variant="outline" size="sm" className="w-full" onClick={onOpenScanner}>
                         <Camera className="mr-2 h-4 w-4" />
@@ -639,13 +643,16 @@ function NoOrderConfirmView({
             {/* Photo preview */}
             {photoPreview && (
                 <div className="space-y-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                        src={photoPreview}
-                        alt="Documento escaneado"
-                        className="w-full rounded-lg border object-cover"
-                        style={{ maxHeight: 220 }}
-                    />
+                    <a href={photoPreview} target="_blank" rel="noreferrer">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                            src={photoPreview}
+                            alt="Documento escaneado — toca para ver completo"
+                            className="w-full rounded-lg border object-contain bg-muted/30"
+                            style={{ maxHeight: 260 }}
+                        />
+                    </a>
+                    <p className="text-center text-xs text-muted-foreground">Toca la imagen para verla completa</p>
                     <Button variant="outline" size="sm" className="w-full" onClick={onRetakePhoto}>
                         <Camera className="mr-2 h-4 w-4" />
                         Repetir foto

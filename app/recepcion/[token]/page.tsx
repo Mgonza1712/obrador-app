@@ -17,7 +17,7 @@ export default async function RecepcionPage({
     const orders = await getPendingOrdersForVenue(venue.id)
 
     return (
-        <div className="min-h-screen bg-background">
+        <div className="h-full overflow-y-auto bg-background">
             <RecepcionClient token={token} venue={venue} initialOrders={orders} />
         </div>
     )
