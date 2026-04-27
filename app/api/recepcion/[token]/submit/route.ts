@@ -65,11 +65,21 @@ export async function POST(
         // Storage errors are non-fatal — we still process the document
     }
 
-    // Photo submitted: don't mark as delivered yet.
-    // The extractor will process the document and MC-4 will update delivery_status
-    // based on actual document vs order comparison.
-    // Only add observations if provided.
-    if (orderId && observations) {
+    // If a photo was taken and linked to an order: mark as "En proceso" immediately
+    // (optimistic — n8n can take >10s due to S3 upload, so we can't wait for job_id)
+    // The Extraction Callback clears scan_submitted_at and updates delivery_status when done.
+    if (photoBase64 && orderId) {
+        await sb
+            .from('erp_purchase_orders')
+            .update({
+                scan_submitted_at: new Date().toISOString(),
+                ...(observations ? { notes: observations } : {}),
+            })
+            .eq('id', orderId)
+
+        revalidatePath(`/pedidos/${orderId}`)
+        revalidatePath('/pedidos')
+    } else if (orderId && observations) {
         await sb
             .from('erp_purchase_orders')
             .update({ notes: observations })
@@ -79,7 +89,7 @@ export async function POST(
         revalidatePath('/pedidos')
     }
 
-    // Send to n8n scanner-intake webhook for extraction (async, non-blocking)
+    // Send to n8n scanner-intake webhook for extraction (fire-and-forget)
     let jobId: string | null = null
     if (photoBase64 && photoFilename) {
         const webhookUrl =
@@ -103,16 +113,7 @@ export async function POST(
             })
             if (res.ok) {
                 const data = await res.json()
-                if (data.job_id) {
-                    jobId = data.job_id
-                    // Mark order as photo-submitted so UI can show "En procesamiento"
-                    if (orderId) {
-                        await supabase
-                            .from('erp_purchase_orders' as any)
-                            .update({ scan_submitted_at: new Date().toISOString() } as any)
-                            .eq('id', orderId)
-                    }
-                }
+                if (data.job_id) jobId = data.job_id
             }
         } catch {
             // Non-blocking — extractor failure doesn't fail the reception

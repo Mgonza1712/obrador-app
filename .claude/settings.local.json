@@ -20,7 +20,8 @@
       "mcp__claude_ai_Vercel__get_project",
       "mcp__claude_ai_Supabase__list_extensions",
       "Bash(npx next:*)",
-      "mcp__claude_ai_n8n__search_workflows"
+      "mcp__claude_ai_n8n__search_workflows",
+      "mcp__claude_ai_n8n__publish_workflow"
     ]
   },
   "disabledMcpjsonServers": [
