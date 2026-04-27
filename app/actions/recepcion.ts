@@ -26,6 +26,7 @@ export interface PendingOrder {
     sent_at: string | null
     notes: string | null
     delivery_status: string
+    scan_submitted_at: string | null
     providers: string[]
     lines: PendingOrderLine[]
 }
@@ -56,7 +57,7 @@ export async function getPendingOrdersForVenue(venueId: string): Promise<Pending
 
     const { data: orders } = await sb
         .from('erp_purchase_orders')
-        .select('id, sent_at, notes, delivery_status')
+        .select('id, sent_at, notes, delivery_status, scan_submitted_at')
         .eq('venue_id', venueId)
         .eq('status', 'sent')
         .in('delivery_status', ['pending', 'partially_delivered'])
@@ -83,6 +84,7 @@ export async function getPendingOrdersForVenue(venueId: string): Promise<Pending
             sent_at: o.sent_at,
             notes: o.notes,
             delivery_status: o.delivery_status ?? 'pending',
+            scan_submitted_at: o.scan_submitted_at ?? null,
             providers: [...providerSet],
             lines: orderLines.map((l: any) => ({
                 id: l.id,

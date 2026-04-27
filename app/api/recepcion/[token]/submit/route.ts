@@ -103,7 +103,16 @@ export async function POST(
             })
             if (res.ok) {
                 const data = await res.json()
-                if (data.job_id) jobId = data.job_id
+                if (data.job_id) {
+                    jobId = data.job_id
+                    // Mark order as photo-submitted so UI can show "En procesamiento"
+                    if (orderId) {
+                        await supabase
+                            .from('erp_purchase_orders' as any)
+                            .update({ scan_submitted_at: new Date().toISOString() } as any)
+                            .eq('id', orderId)
+                    }
+                }
             }
         } catch {
             // Non-blocking — extractor failure doesn't fail the reception

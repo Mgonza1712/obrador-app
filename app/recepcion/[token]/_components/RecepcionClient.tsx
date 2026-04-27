@@ -418,7 +418,7 @@ function OrderCard({
                         {sentDate ? ` · Pedido el ${sentDate}` : ''}
                     </p>
                 </div>
-                <DeliveryBadge status={order.delivery_status} />
+                <DeliveryBadge status={order.delivery_status} scanSubmittedAt={order.scan_submitted_at} />
             </div>
             <Button className="mt-3 w-full" size="sm" onClick={() => onSelect(order)}>
                 Recibir
@@ -427,11 +427,18 @@ function OrderCard({
     )
 }
 
-function DeliveryBadge({ status }: { status: string }) {
+function DeliveryBadge({ status, scanSubmittedAt }: { status: string; scanSubmittedAt: string | null }) {
     if (status === 'partially_delivered') {
         return (
             <Badge variant="outline" className="border-amber-400 text-amber-600 shrink-0">
                 Parcial
+            </Badge>
+        )
+    }
+    if (status === 'pending' && scanSubmittedAt) {
+        return (
+            <Badge variant="outline" className="border-amber-400 text-amber-600 shrink-0">
+                En proceso
             </Badge>
         )
     }
