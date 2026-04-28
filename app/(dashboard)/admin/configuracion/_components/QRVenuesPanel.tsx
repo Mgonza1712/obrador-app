@@ -43,7 +43,7 @@ function VenueQRCard({ venue, baseUrl }: { venue: VenueQR; baseUrl: string }) {
     const wrapperRef = useRef<HTMLDivElement>(null)
     const [copied, setCopied] = useState(false)
 
-    const url = `${baseUrl}/recepcion/${venue.reception_token}`
+    const url = `${baseUrl}/scan/${venue.reception_token}`
 
     function handleDownload() {
         // qrcode.react renders a <canvas> inside a wrapper div

@@ -1,8 +1,11 @@
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
-import { AlertCircle } from 'lucide-react'
+import { createServiceClient } from '@/lib/supabase/service'
+import { AlertCircle, QrCode } from 'lucide-react'
 import DocumentosClient from './DocumentosClient'
 import { applyDocumentFilters } from './_lib/applyDocumentFilters'
 import { getProviders } from './_actions'
+import { UploadDropZone, type VenueOption } from './_components/UploadDropZone'
 
 export const metadata = {
     title: 'Documentos | Obrador',
@@ -56,6 +59,16 @@ export default async function DocumentosPage({
     const hasPendingLines = params.has_pending_lines === 'true'
 
     const providers = await getProviders()
+
+    const serviceClient = createServiceClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: venuesRaw } = await (serviceClient as any)
+        .from('erp_venues')
+        .select('id, name, reception_token')
+        .neq('type', 'generic')
+        .order('name')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const venues: VenueOption[] = (venuesRaw ?? []) as any[]
 
     // When filtering by pending lines: first fetch the document IDs that qualify.
     // (PostgREST cannot express EXISTS as a column predicate, so we pre-resolve the IDs.)
@@ -149,6 +162,7 @@ export default async function DocumentosPage({
     return (
         <div className="space-y-6">
             <PageHeader />
+            <UploadDropZone venues={venues} />
             <DocumentosClient documents={documents} total={count ?? 0} page={page} pageSize={PAGE_SIZE} providers={providers} />
         </div>
     )
@@ -156,11 +170,20 @@ export default async function DocumentosPage({
 
 function PageHeader() {
     return (
-        <div>
-            <h1 className="text-2xl font-bold tracking-tight">Documentos</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-                Facturas, albaranes y presupuestos del sistema.
-            </p>
+        <div className="flex items-start justify-between gap-4">
+            <div>
+                <h1 className="text-2xl font-bold tracking-tight">Documentos</h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                    Facturas, albaranes y presupuestos del sistema.
+                </p>
+            </div>
+            <Link
+                href="/documentos/qr"
+                className="flex shrink-0 items-center gap-1.5 rounded-md border bg-background px-3 py-2 text-sm font-medium hover:bg-muted transition-colors"
+            >
+                <QrCode className="h-4 w-4" />
+                QR de recepción
+            </Link>
         </div>
     )
 }

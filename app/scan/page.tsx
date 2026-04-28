@@ -1,7 +1,7 @@
 'use client';
 
 import { Suspense, useState, useRef, useCallback, useEffect } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -70,8 +70,14 @@ async function buildPdf(pages: CapturedPage[]): Promise<string> {
 
 function ScannerContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const token = searchParams.get('t') ?? '';
   const localParam = searchParams.get('local') as LocalSlug | null;
+
+  // Redirect legacy ?t=TOKEN URLs to the canonical /scan/[token] route
+  useEffect(() => {
+    if (token) router.replace(`/scan/${token}`);
+  }, [token, router]);
   const lockedLocal = localParam && LOCALES.some((l) => l.slug === localParam) ? localParam : null;
 
   const [local, setLocal] = useState<LocalSlug | null>(lockedLocal);

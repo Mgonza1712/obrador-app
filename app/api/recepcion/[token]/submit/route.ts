@@ -108,7 +108,7 @@ export async function POST(
                     venue_id: venue.id,
                     observations,
                     doc_type: docType,
-                    source: 'recepcion_anonima',
+                    source: 'scan',
                 }),
             })
             if (res.ok) {
