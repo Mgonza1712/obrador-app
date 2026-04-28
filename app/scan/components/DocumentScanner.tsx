@@ -15,8 +15,6 @@ interface CornerSet {
   br: { x: number; y: number };
 }
 
-interface VideoRect { x: number; y: number; w: number; h: number }
-
 export interface DocumentScannerProps {
   onCapture: (processedDataUrl: string) => void;
   onCancel: () => void;
@@ -34,26 +32,14 @@ const EXTRACT_MIN_AREA_RATIO = 0.15;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Rect where video is displayed within a container using object-contain semantics */
-function getContainRect(cw: number, ch: number, vw: number, vh: number): VideoRect {
-  const scale = Math.min(cw / vw, ch / vh);
-  const w = vw * scale;
-  const h = vh * scale;
-  return { x: (cw - w) / 2, y: (ch - h) / 2, w, h };
-}
-
-/**
- * Maps a tap position (in container coords) to normalized [0,1] video coords.
- * Returns null if the tap is in the letterbox area (outside the video rect).
- */
-function tapToVideoNorm(
-  tapX: number, tapY: number,
-  cw: number, ch: number,
-  vw: number, vh: number,
-): { x: number; y: number } | null {
-  const r = getContainRect(cw, ch, vw, vh);
-  if (tapX < r.x || tapX > r.x + r.w || tapY < r.y || tapY > r.y + r.h) return null;
-  return { x: (tapX - r.x) / r.w, y: (tapY - r.y) / r.h };
+/** Returns scale + offsets to map video coords → display coords under object-cover. */
+function getCoverMapping(ow: number, oh: number, vw: number, vh: number) {
+  const scale = Math.max(ow / vw, oh / vh);
+  return {
+    scale,
+    offsetX: (ow - vw * scale) / 2,  // typically ≤ 0 (cropped sides)
+    offsetY: (oh - vh * scale) / 2,
+  };
 }
 
 function lerpPt(ax: number, ay: number, bx: number, by: number, α: number) {
@@ -101,17 +87,16 @@ function drawCornerOverlay(ctx: CanvasRenderingContext2D, c: CornerSet, progress
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
-  const videoRef   = useRef<HTMLVideoElement>(null);
-  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const videoRef     = useRef<HTMLVideoElement>(null);
+  const overlayRef   = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const streamRef  = useRef<MediaStream | null>(null);
-  const rafRef     = useRef<number | null>(null);
+  const streamRef    = useRef<MediaStream | null>(null);
+  const rafRef       = useRef<number | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const scannerRef = useRef<any>(null);
-  const tempCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scannerRef   = useRef<any>(null);
+  const tempCanvasRef  = useRef<HTMLCanvasElement | null>(null);
+  const focusTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Detection refs — avoid stale closures in RAF loop
   const prevRawCornersRef  = useRef<CornerSet | null>(null);
   const smoothedCornersRef = useRef<CornerSet | null>(null);
   const stableCountRef     = useRef(0);
@@ -127,8 +112,6 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
   const [brightness, setBrightness]   = useState(100);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [focusRing, setFocusRing]     = useState<{ x: number; y: number } | null>(null);
-  // Rect where the video is actually drawn (object-contain letterbox awareness)
-  const [videoRect, setVideoRect]     = useState<VideoRect | null>(null);
 
   // ── OpenCV loading ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -147,7 +130,7 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any;
     if (w.cv?.Mat) { initJscanify(); return () => { active = false; }; }
-    if (w.cv)       { w.cv.onRuntimeInitialized = initJscanify; return () => { active = false; }; }
+    if (w.cv)      { w.cv.onRuntimeInitialized = initJscanify; return () => { active = false; }; }
 
     const existing = document.querySelector('script[data-opencv]') as HTMLScriptElement | null;
     if (existing) {
@@ -171,10 +154,6 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
   }, []);
 
   // ── Camera ─────────────────────────────────────────────────────────────────
-  // Root cause fix: minimal constraints only.
-  // - No width/height: iOS picks its native video mode → autofocus works
-  // - No applyConstraints(focusMode): not supported on WebKit, silently fails
-  // - facingMode as string (not object): broader iOS compatibility
   const startCamera = useCallback(async () => {
     setCameraError(null);
     didCaptureRef.current = false;
@@ -182,12 +161,20 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
     smoothedCornersRef.current = null;
     stableCountRef.current = 0;
     stableProgressRef.current = 0;
-    setVideoRect(null);
+
+    // iOS Safari breaks autofocus with resolution constraints or applyConstraints(focusMode).
+    // Give iOS ideal 1920×1080 (native landscape sensor mode, won't break autofocus).
+    // Android supports 1920×1440 (4:3) and applyConstraints for continuous focus.
+    const isIOS =
+      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+    const videoConstraints = isIOS
+      ? { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+      : { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1440 } };
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-      });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
       streamRef.current = stream;
 
       const video = videoRef.current;
@@ -197,15 +184,13 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
       video.onloadedmetadata = () => {
         video.play().then(() => {
           setMode('live');
-          // Compute where the video is displayed (for overlay alignment)
-          const container = containerRef.current;
-          if (container && video.videoWidth) {
-            setVideoRect(getContainRect(
-              container.clientWidth,
-              container.clientHeight,
-              video.videoWidth,
-              video.videoHeight,
-            ));
+          // Request continuous autofocus on Android (silently ignored on iOS)
+          if (!isIOS) {
+            const track = stream.getVideoTracks()[0];
+            track?.applyConstraints({
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              advanced: [{ focusMode: 'continuous' } as any],
+            }).catch(() => {});
           }
         });
       };
@@ -224,31 +209,33 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
     };
   }, [startCamera]);
 
-  // ── Tap-to-focus ────────────────────────────────────────────────────────────
-  // object-contain coordinate mapping: tap inside video area → normalized [0,1]
+  // ── Tap-to-focus ─────────────────────────────────────────────────────────────
   const handleTapToFocus = useCallback(async (e: React.TouchEvent | React.MouseEvent) => {
     if (mode !== 'live') return;
-    const video = videoRef.current;
-    const track = streamRef.current?.getVideoTracks()[0];
+    const video     = videoRef.current;
+    const track     = streamRef.current?.getVideoTracks()[0];
     const container = containerRef.current;
     if (!video || !track || !container) return;
 
-    const rect = container.getBoundingClientRect();
+    const rect    = container.getBoundingClientRect();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    const tapX = clientX - rect.left;
-    const tapY = clientY - rect.top;
+    const tapX    = clientX - rect.left;
+    const tapY    = clientY - rect.top;
 
-    // Ignore taps in letterbox area
-    const norm = tapToVideoNorm(tapX, tapY, container.clientWidth, container.clientHeight, video.videoWidth, video.videoHeight);
-    if (!norm) return;
+    // object-cover: any tap in the container maps to a valid video point
+    const { scale: coverScale, offsetX, offsetY } = getCoverMapping(
+      container.clientWidth, container.clientHeight, video.videoWidth, video.videoHeight,
+    );
+    const norm = {
+      x: Math.max(0, Math.min(1, (tapX - offsetX) / (coverScale * video.videoWidth))),
+      y: Math.max(0, Math.min(1, (tapY - offsetY) / (coverScale * video.videoHeight))),
+    };
 
-    // Visual focus ring
     if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
     setFocusRing({ x: tapX, y: tapY });
     focusTimerRef.current = setTimeout(() => setFocusRing(null), 1500);
 
-    // pointOfInterest — best-effort, silently ignored on unsupported devices
     try {
       await track.applyConstraints({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -258,12 +245,39 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         track.applyConstraints({ advanced: [{ focusMode: 'continuous' } as any] }).catch(() => {});
       }, 3000);
-    } catch { /* device doesn't support — no-op */ }
+    } catch { /* unsupported — no-op */ }
   }, [mode]);
 
-  // ── Capture ─────────────────────────────────────────────────────────────────
-  // object-contain: drawImage(video, 0, 0, vw, vh) captures the FULL video frame
-  // which is exactly what the user sees on screen (no crop mismatch).
+  // ── Manual capture (raw frame, OpenCV bypassed) ────────────────────────────
+  // The shutter button always uses this path. We never run extractPaper on manual
+  // captures because jscanify might detect noise and produce a garbage crop.
+  const captureRaw = useCallback(() => {
+    if (didCaptureRef.current) return;
+    didCaptureRef.current = true;
+
+    const video = videoRef.current;
+    if (!video || video.readyState < 2) { didCaptureRef.current = false; return; }
+
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    setMode('processing');
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) { didCaptureRef.current = false; setMode('live'); return; }
+
+    const rawCanvas = document.createElement('canvas');
+    rawCanvas.width = vw;
+    rawCanvas.height = vh;
+    rawCanvas.getContext('2d')!.drawImage(video, 0, 0);
+
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+
+    setReviewUrl(rawCanvas.toDataURL('image/jpeg', 0.92));
+    setMode('review');
+  }, []);
+
+  // ── Auto-capture (triggered by detection loop when stable) ────────────────
+  // Only this path runs extractPaper — we know the document is stable and green.
   const runCapture = useCallback(() => {
     if (didCaptureRef.current) return;
     didCaptureRef.current = true;
@@ -291,7 +305,7 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cv = (window as any).cv;
-        const imgMat = cv.imread(rawCanvas);
+        const imgMat  = cv.imread(rawCanvas);
         const contour = scannerRef.current.findPaperContour(imgMat);
         imgMat.delete();
 
@@ -317,10 +331,10 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
             contour.delete();
           }
         }
-      } catch { /* fall through */ }
+      } catch { /* fall through to raw */ }
     }
 
-    // Fallback: raw frame — shows exactly what user saw (object-contain = no crop)
+    // Fallback: raw frame
     setReviewUrl(rawCanvas.toDataURL('image/jpeg', 0.92));
     setMode('review');
   }, [cvReady]);
@@ -338,7 +352,6 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
         rafRef.current = requestAnimationFrame(tick); return;
       }
 
-      // Sync overlay pixel size to CSS size
       const ow = overlay.offsetWidth;
       const oh = overlay.offsetHeight;
       if (ow > 0 && oh > 0 && (overlay.width !== ow || overlay.height !== oh)) {
@@ -378,7 +391,7 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
 
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const cv = (window as any).cv;
+        const cv      = (window as any).cv;
         const img     = cv.imread(tempCanvas);
         const contour = scannerRef.current.findPaperContour(img);
         img.delete();
@@ -397,34 +410,34 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
         }
 
         const rawCorners: CornerSet = {
-          tl: { x: raw.topLeftCorner.x,     y: raw.topLeftCorner.y },
-          tr: { x: raw.topRightCorner.x,    y: raw.topRightCorner.y },
-          bl: { x: raw.bottomLeftCorner.x,  y: raw.bottomLeftCorner.y },
+          tl: { x: raw.topLeftCorner.x,    y: raw.topLeftCorner.y },
+          tr: { x: raw.topRightCorner.x,   y: raw.topRightCorner.y },
+          bl: { x: raw.bottomLeftCorner.x, y: raw.bottomLeftCorner.y },
           br: { x: raw.bottomRightCorner.x, y: raw.bottomRightCorner.y },
         };
 
-        // Stability on raw coords
-        const prevRaw = prevRawCornersRef.current;
+        const prevRaw  = prevRawCornersRef.current;
         const isStable = prevRaw !== null && cornersMaxDist(rawCorners, prevRaw) < STABLE_THRESHOLD;
         stableCountRef.current = isStable
           ? stableCountRef.current + 1
           : Math.max(0, stableCountRef.current - 1);
-        prevRawCornersRef.current = rawCorners; // update AFTER stability check
+        prevRawCornersRef.current = rawCorners;  // update AFTER stability check
 
         const progress = Math.min(stableCountRef.current / STABLE_FRAMES, 1);
         stableProgressRef.current = progress;
 
-        // Map corners into overlay coords accounting for object-contain letterbox
-        // Detection canvas has same aspect ratio as video → use same getContainRect
-        const vr = getContainRect(ow, oh, DETECT_W, DETECT_H);
+        // Map detection-canvas corners → overlay display coords (object-cover)
+        const { scale: coverScale, offsetX: covOffX, offsetY: covOffY } =
+          getCoverMapping(ow, oh, vw, vh);
+        const scaleX = (vw / DETECT_W) * coverScale;
+        const scaleY = (vh / DETECT_H) * coverScale;
         const scaledCorners: CornerSet = {
-          tl: { x: rawCorners.tl.x * vr.w / DETECT_W + vr.x, y: rawCorners.tl.y * vr.h / DETECT_H + vr.y },
-          tr: { x: rawCorners.tr.x * vr.w / DETECT_W + vr.x, y: rawCorners.tr.y * vr.h / DETECT_H + vr.y },
-          bl: { x: rawCorners.bl.x * vr.w / DETECT_W + vr.x, y: rawCorners.bl.y * vr.h / DETECT_H + vr.y },
-          br: { x: rawCorners.br.x * vr.w / DETECT_W + vr.x, y: rawCorners.br.y * vr.h / DETECT_H + vr.y },
+          tl: { x: rawCorners.tl.x * scaleX + covOffX, y: rawCorners.tl.y * scaleY + covOffY },
+          tr: { x: rawCorners.tr.x * scaleX + covOffX, y: rawCorners.tr.y * scaleY + covOffY },
+          bl: { x: rawCorners.bl.x * scaleX + covOffX, y: rawCorners.bl.y * scaleY + covOffY },
+          br: { x: rawCorners.br.x * scaleX + covOffX, y: rawCorners.br.y * scaleY + covOffY },
         };
 
-        // EMA smoothing for display only
         smoothedCornersRef.current = lerpCorners(
           smoothedCornersRef.current ?? scaledCorners,
           scaledCorners,
@@ -532,26 +545,25 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
   // ── Live camera view ───────────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
-      {/* Camera area */}
       <div
         ref={containerRef}
         className="relative flex-1 overflow-hidden"
         onTouchStart={handleTapToFocus}
         onClick={handleTapToFocus}
       >
-        {/* object-contain: full video frame visible, no CSS crop → canvas matches */}
+        {/* object-cover fills the container — UI looks full-bleed as expected */}
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
-          className="w-full h-full object-contain"
+          className="w-full h-full object-cover"
         />
 
-        {/* Detection overlay — corners mapped into video display rect */}
+        {/* Detection overlay — corners mapped into cover display coords */}
         <canvas ref={overlayRef} className="absolute inset-0 w-full h-full pointer-events-none" />
 
-        {/* Focus ring at tap position */}
+        {/* Focus ring */}
         {mode === 'live' && focusRing && (
           <div
             className="absolute pointer-events-none"
@@ -562,21 +574,12 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
           </div>
         )}
 
-        {/* A4 guide — positioned within the actual video display rect */}
-        {mode === 'live' && !docDetected && videoRect && (
-          <div
-            className="absolute pointer-events-none"
-            style={{ left: videoRect.x, top: videoRect.y, width: videoRect.w, height: videoRect.h }}
-          >
+        {/* A4 guide — centered in container; object-cover so container = full view */}
+        {mode === 'live' && !docDetected && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div
-              className="absolute border-2 border-white/50 rounded"
-              style={{
-                width: '80%',
-                aspectRatio: '0.707',
-                top: '50%',
-                left: '50%',
-                transform: 'translate(-50%, -50%)',
-              }}
+              className="relative border-2 border-white/50 rounded"
+              style={{ width: '80%', aspectRatio: '0.707' }}
             >
               {(
                 ['top-0 left-0 border-t-4 border-l-4 rounded-tl',
@@ -628,9 +631,10 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
         <Button variant="ghost" size="icon" className="text-white h-12 w-12" onClick={onCancel}>
           <X className="h-6 w-6" />
         </Button>
+        {/* Manual shutter: always saves raw frame, never runs extractPaper */}
         <button
           disabled={mode !== 'live'}
-          onClick={runCapture}
+          onClick={captureRaw}
           aria-label="Capturar documento"
           className="h-16 w-16 rounded-full bg-white disabled:opacity-40 flex items-center justify-center shadow-lg active:scale-95 transition-transform"
         >
