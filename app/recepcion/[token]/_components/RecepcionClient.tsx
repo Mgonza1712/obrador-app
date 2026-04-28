@@ -21,8 +21,7 @@ import {
 } from 'lucide-react'
 import type { VenueInfo, PendingOrder, PendingOrderLine } from '@/app/actions/recepcion'
 import { anonRegisterDelivery } from '@/app/actions/recepcion'
-import { CameraCapture } from '@/app/scan/components/CameraCapture'
-import { PerspectiveEditor } from '@/app/scan/components/PerspectiveEditor'
+import { DocumentScanner } from '@/app/scan/components/DocumentScanner'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -74,8 +73,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     const [lightboxSrc, setLightboxSrc]     = useState<string | null>(null)
 
     // ── Scanner state ─────────────────────────────────────────────────────────
-    const [scanContext, setScanContext]       = useState<ScanContext>(null)
-    const [scanRawCapture, setScanRawCapture] = useState<string | null>(null)
+    const [scanContext, setScanContext] = useState<ScanContext>(null)
 
     const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -91,7 +89,6 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     }
 
     function handleOpenScanner(ctx: ScanContext) {
-        setScanRawCapture(null)
         setScanContext(ctx)
     }
 
@@ -102,14 +99,13 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         setPhotoPreview(URL.createObjectURL(file))
     }
 
-    // Called when PerspectiveEditor confirms the corrected image
-    function handlePerspectiveConfirm(processedDataUrl: string, ctx: ScanContext) {
+    // Called when DocumentScanner delivers the processed (perspective-corrected) image
+    function handleScannerCapture(processedDataUrl: string) {
+        const ctx = scanContext
         const file = dataUrlToFile(processedDataUrl, `scan_${Date.now()}.jpg`)
         setPhoto(file)
         setPhotoPreview(processedDataUrl)
-        setScanRawCapture(null)
         setScanContext(null)
-
         if (ctx === 'no-order') {
             setStep('no-order-confirm')
         }
@@ -198,7 +194,6 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         setErrorMsg('')
         setSuccessMsg('')
         setScanContext(null)
-        setScanRawCapture(null)
         router.refresh()
     }
 
@@ -230,25 +225,11 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     // ── Scanner overlay (full-screen, takes over the whole render) ────────────
 
     if (scanContext !== null) {
-        if (scanRawCapture === null) {
-            // Step 1: Live camera
-            return (
-                <CameraCapture
-                    onCapture={(dataUrl) => setScanRawCapture(dataUrl)}
-                    onCancel={() => setScanContext(null)}
-                />
-            )
-        }
-        // Step 2: Perspective correction
-        const ctx = scanContext // capture for closure
         return (
-            <div className="fixed inset-0 z-40 bg-background flex flex-col">
-                <PerspectiveEditor
-                    imageDataUrl={scanRawCapture}
-                    onConfirm={(processed) => handlePerspectiveConfirm(processed, ctx)}
-                    onRetake={() => setScanRawCapture(null)}
-                />
-            </div>
+            <DocumentScanner
+                onCapture={handleScannerCapture}
+                onCancel={() => setScanContext(null)}
+            />
         )
     }
 

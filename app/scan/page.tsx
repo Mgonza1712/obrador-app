@@ -16,8 +16,7 @@ import {
   ChevronLeft,
   Send,
 } from 'lucide-react';
-import { CameraCapture } from './components/CameraCapture';
-import { PerspectiveEditor } from './components/PerspectiveEditor';
+import { DocumentScanner } from './components/DocumentScanner';
 import { PagePreview, type CapturedPage } from './components/PagePreview';
 
 const WEBHOOK_URL = 'https://n8n.wescaleops.com/webhook/scanner-intake';
@@ -30,7 +29,7 @@ const LOCALES = [
 
 type LocalSlug = (typeof LOCALES)[number]['slug'];
 type SubmitStatus = 'idle' | 'submitting' | 'processing' | 'success' | 'error' | 'duplicate';
-type Step = 'select-local' | 'capture' | 'perspective' | 'review' | 'result';
+type Step = 'select-local' | 'capture' | 'review' | 'result';
 
 function dataUrlToBase64(dataUrl: string): string {
   return dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
@@ -77,9 +76,6 @@ function ScannerContent() {
 
   const [local, setLocal] = useState<LocalSlug | null>(lockedLocal);
   const [step, setStep] = useState<Step>(lockedLocal ? 'capture' : 'select-local');
-
-  // Camera / perspective flow
-  const [capturedImageUrl, setCapturedImageUrl] = useState<string | null>(null);
 
   // Pages accumulator
   const [pages, setPages] = useState<CapturedPage[]>([]);
@@ -179,16 +175,9 @@ function ScannerContent() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, []);
 
-  // ─── Camera capture → perspective editor ────────────────────────────
-  const handleCameraCapture = (dataUrl: string) => {
-    setCapturedImageUrl(dataUrl);
-    setStep('perspective');
-  };
-
-  // ─── Perspective confirmed → add to pages ───────────────────────────
-  const handlePerspectiveConfirm = (processedDataUrl: string) => {
+  // ─── DocumentScanner confirmed → add to pages ───────────────────────
+  const handleDocumentScanned = (processedDataUrl: string) => {
     setPages((prev) => [...prev, { dataUrl: processedDataUrl, index: prev.length }]);
-    setCapturedImageUrl(null);
     setStep('review');
   };
 
@@ -282,7 +271,6 @@ function ScannerContent() {
     if (pollingRef.current) clearInterval(pollingRef.current);
     setPages([]);
     setPdfPreview(null);
-    setCapturedImageUrl(null);
     setSubmitStatus('idle');
     setResultMessage('');
     setDocId(null);
@@ -312,22 +300,10 @@ function ScannerContent() {
 
   if (step === 'capture') {
     return (
-      <CameraCapture
-        onCapture={handleCameraCapture}
+      <DocumentScanner
+        onCapture={handleDocumentScanned}
         onCancel={() => setStep(pages.length > 0 ? 'review' : 'select-local')}
       />
-    );
-  }
-
-  if (step === 'perspective' && capturedImageUrl) {
-    return (
-      <div className="fixed inset-0 z-40 flex flex-col bg-background">
-        <PerspectiveEditor
-          imageDataUrl={capturedImageUrl}
-          onConfirm={handlePerspectiveConfirm}
-          onRetake={() => { setCapturedImageUrl(null); setStep('capture'); }}
-        />
-      </div>
     );
   }
 
