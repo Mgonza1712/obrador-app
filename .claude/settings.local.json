@@ -22,7 +22,9 @@
       "Bash(npx next:*)",
       "mcp__claude_ai_n8n__search_workflows",
       "mcp__claude_ai_n8n__publish_workflow",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   },
   "disabledMcpjsonServers": [
