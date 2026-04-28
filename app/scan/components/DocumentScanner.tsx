@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Camera, X, RotateCcw, Check } from 'lucide-react';
 
@@ -203,13 +203,23 @@ export function DocumentScanner({ onCapture, onCancel }: DocumentScannerProps) {
     };
   }, [startCamera]);
 
-  // ── Perspective editor: container size via ResizeObserver ──────────────────
+  // ── Perspective editor: container size ────────────────────────────────────
+  // useLayoutEffect fires synchronously after DOM commit (before paint) so
+  // getBoundingClientRect is reliable even on first render on iOS Safari.
+  useLayoutEffect(() => {
+    if (mode !== 'perspective' || !perspContainerRef.current) return;
+    const { width: w, height: h } = perspContainerRef.current.getBoundingClientRect();
+    if (w > 0 && h > 0) setPerspSize({ w, h });
+  }, [mode]);
+
+  // ResizeObserver handles orientation changes after the editor is open.
   useEffect(() => {
     if (mode !== 'perspective' || !perspContainerRef.current) return;
     const el = perspContainerRef.current;
-    const update = () => setPerspSize({ w: el.clientWidth, h: el.clientHeight });
-    update();
-    const ro = new ResizeObserver(update);
+    const ro = new ResizeObserver(() => {
+      const { width: w, height: h } = el.getBoundingClientRect();
+      if (w > 0 && h > 0) setPerspSize({ w, h });
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, [mode]);
