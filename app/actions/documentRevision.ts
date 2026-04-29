@@ -387,6 +387,7 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                     for (const correction of corrections) {
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         await (supabase as any).from('extraction_corrections').insert({
+                            document_id: payload.document.id,
                             purchase_line_id: line.purchase_line_id,
                             field_name: correction.field_name,
                             extracted_value: correction.extracted_value,

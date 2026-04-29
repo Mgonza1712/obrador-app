@@ -336,6 +336,27 @@ export type Database = {
           },
         ]
       }
+      erp_app_settings: {
+        Row: {
+          description: string | null
+          key: string
+          updated_at: string | null
+          value: string
+        }
+        Insert: {
+          description?: string | null
+          key: string
+          updated_at?: string | null
+          value: string
+        }
+        Update: {
+          description?: string | null
+          key?: string
+          updated_at?: string | null
+          value?: string
+        }
+        Relationships: []
+      }
       erp_channel_accounts: {
         Row: {
           account_id: string
@@ -411,6 +432,7 @@ export type Database = {
           document_number: string | null
           drive_url: string | null
           id: string
+          notes: string | null
           parent_invoice_id: string | null
           provider_id: string | null
           reconciliation_delta: number | null
@@ -430,6 +452,7 @@ export type Database = {
           document_number?: string | null
           drive_url?: string | null
           id?: string
+          notes?: string | null
           parent_invoice_id?: string | null
           provider_id?: string | null
           reconciliation_delta?: number | null
@@ -449,6 +472,7 @@ export type Database = {
           document_number?: string | null
           drive_url?: string | null
           id?: string
+          notes?: string | null
           parent_invoice_id?: string | null
           provider_id?: string | null
           reconciliation_delta?: number | null
@@ -936,6 +960,7 @@ export type Database = {
           provider_notes: Json | null
           recurrence_cron: string | null
           recurrence_label: string | null
+          scan_submitted_at: string | null
           scheduled_for: string | null
           sector: string | null
           sent_at: string | null
@@ -957,6 +982,7 @@ export type Database = {
           provider_notes?: Json | null
           recurrence_cron?: string | null
           recurrence_label?: string | null
+          scan_submitted_at?: string | null
           scheduled_for?: string | null
           sector?: string | null
           sent_at?: string | null
@@ -978,6 +1004,7 @@ export type Database = {
           provider_notes?: Json | null
           recurrence_cron?: string | null
           recurrence_label?: string | null
+          scan_submitted_at?: string | null
           scheduled_for?: string | null
           sector?: string | null
           sent_at?: string | null
@@ -1044,6 +1071,8 @@ export type Database = {
           chatwoot_account_id: number | null
           chatwoot_inbox_id: number | null
           created_at: string | null
+          email_from: string | null
+          email_from_name: string | null
           evolution_api_url: string | null
           evolution_bot_instance: string | null
           evolution_ordering_instance: string | null
@@ -1055,6 +1084,8 @@ export type Database = {
           chatwoot_account_id?: number | null
           chatwoot_inbox_id?: number | null
           created_at?: string | null
+          email_from?: string | null
+          email_from_name?: string | null
           evolution_api_url?: string | null
           evolution_bot_instance?: string | null
           evolution_ordering_instance?: string | null
@@ -1066,6 +1097,8 @@ export type Database = {
           chatwoot_account_id?: number | null
           chatwoot_inbox_id?: number | null
           created_at?: string | null
+          email_from?: string | null
+          email_from_name?: string | null
           evolution_api_url?: string | null
           evolution_bot_instance?: string | null
           evolution_ordering_instance?: string | null
@@ -1078,25 +1111,34 @@ export type Database = {
       erp_venues: {
         Row: {
           created_at: string | null
+          email_from: string | null
+          email_from_name: string | null
           id: string
           name: string
           reception_token: string | null
+          reply_to_email: string | null
           tenant_id: string | null
           type: string | null
         }
         Insert: {
           created_at?: string | null
+          email_from?: string | null
+          email_from_name?: string | null
           id?: string
           name: string
           reception_token?: string | null
+          reply_to_email?: string | null
           tenant_id?: string | null
           type?: string | null
         }
         Update: {
           created_at?: string | null
+          email_from?: string | null
+          email_from_name?: string | null
           id?: string
           name?: string
           reception_token?: string | null
+          reply_to_email?: string | null
           tenant_id?: string | null
           type?: string | null
         }
@@ -1789,6 +1831,7 @@ export type Database = {
         Args: { p_assembly_id: string }
         Returns: number
       }
+      compute_next_run_at: { Args: { cron_expr: string }; Returns: string }
       get_component_unit_cost: {
         Args: { p_master_item_id: string }
         Returns: number
@@ -1819,6 +1862,7 @@ export type Database = {
         Args: { p_file_url?: string; p_json_payload: Json; p_tenant_id: string }
         Returns: Json
       }
+      process_scheduled_orders: { Args: never; Returns: undefined }
       propagate_cogs_from_item: {
         Args: { p_master_item_id: string }
         Returns: undefined

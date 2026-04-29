@@ -22,7 +22,7 @@ export default async function RevisionDetailPage({ params, searchParams }: Props
     // ── 1. Fetch the document (flat) ──
     const { data: docRaw, error: docError } = await supabase
         .from('erp_documents')
-        .select('id, doc_type, document_date, document_number, total_amount, status, drive_url, provider_id, venue_id, ai_interpretation')
+        .select('id, doc_type, document_date, document_number, total_amount, status, drive_url, provider_id, venue_id, ai_interpretation, notes')
         .eq('id', id)
         .single()
 
@@ -69,6 +69,7 @@ export default async function RevisionDetailPage({ params, searchParams }: Props
         status: docRaw.status,
         drive_url: docRaw.drive_url,
         provider_id: docRaw.provider_id,
+        notes: docRaw.notes ?? null,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ai_interpretation: (docRaw.ai_interpretation ?? null) as any,
         erp_providers: currentProvider,

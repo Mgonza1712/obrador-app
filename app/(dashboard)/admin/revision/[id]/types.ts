@@ -74,6 +74,7 @@ export interface DocumentWithRelations {
     status: string | null
     drive_url: string | null
     provider_id: string | null
+    notes: string | null
     ai_interpretation: DocumentAiInterpretation | null
     erp_providers: { id: string; name: string } | null
     erp_venues: { id: string; name: string } | null

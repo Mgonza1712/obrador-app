@@ -888,6 +888,14 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                 </div>
             </div>
 
+            {/* ── Notas del operario (scanner) ── */}
+            {doc.notes && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span><span className="font-medium">Nota del recepcionista:</span> {doc.notes}</span>
+                </div>
+            )}
+
             {/* ── Main content split — 50/50 ── */}
             <div className="flex flex-col lg:flex-row gap-6 items-start">
 
@@ -1522,7 +1530,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                                 </select>
                                                             </div>
                                                             <div>
-                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Envases por formato <FieldTooltip text="Cuántas unidades trae ese bulto. Ej: una caja de Heineken trae 24 botellas → 24. Un barril → 1." /></label>
+                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Piezas por bulto <FieldTooltip text="Cuántas piezas individuales trae el bulto que comprás. Ej: caja de Heineken → 24 botellas; maple de huevos → 30; barril → 1; kg de banana → 1." /></label>
                                                                 <input
                                                                     type="number"
                                                                     step="any"
@@ -1533,7 +1541,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                                 />
                                                             </div>
                                                             <div>
-                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Contenido por envase <FieldTooltip text="Volumen o peso de CADA unidad individual. Ej: botella Heineken 1/3 → 333 (ml). Kg de queso → 1000 (g). Pieza indivisible → 1 (ud)." /></label>
+                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Contenido por pieza <FieldTooltip text="Volumen o peso de cada pieza individual en ml o g. Ej: botella Heineken → 333 (ml); huevo → 1 (ud); 1 kg banana → 1000 (g); lata lejía 5L → 5000 (ml)." /></label>
                                                                 <input
                                                                     type="number"
                                                                     step="any"
@@ -1823,7 +1831,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                                                 </select>
                                                                             </div>
                                                                             <div>
-                                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Envases por formato <FieldTooltip text="Cuántas unidades trae ese bulto. Ej: una caja de Heineken trae 24 botellas → 24. Un barril → 1." /></label>
+                                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Piezas por bulto <FieldTooltip text="Cuántas piezas individuales trae el bulto que comprás. Ej: caja de Heineken → 24 botellas; maple de huevos → 30; barril → 1; kg de banana → 1." /></label>
                                                                                 <input
                                                                                     type="number"
                                                                                     step="any"
@@ -1834,7 +1842,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                                                 />
                                                                             </div>
                                                                             <div>
-                                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Contenido por envase <FieldTooltip text="Volumen o peso de CADA unidad individual. Ej: botella Heineken 1/3 → 333 (ml). Kg de queso → 1000 (g). Pieza indivisible → 1 (ud)." /></label>
+                                                                                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Contenido por pieza <FieldTooltip text="Volumen o peso de cada pieza individual en ml o g. Ej: botella Heineken → 333 (ml); huevo → 1 (ud); 1 kg banana → 1000 (g); lata lejía 5L → 5000 (ml)." /></label>
                                                                                 <input
                                                                                     type="number"
                                                                                     step="any"
@@ -1989,13 +1997,13 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                         </select>
                                                     </div>
                                                     <div>
-                                                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Envases/formato</label>
+                                                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Piezas por bulto</label>
                                                         <input type="number" step="any" min="0" value={state.envases_por_formato}
                                                             onChange={(e) => updateLine(tempId, { envases_por_formato: Number(e.target.value) })}
                                                             className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
                                                     </div>
                                                     <div>
-                                                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Contenido/envase</label>
+                                                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Contenido por pieza</label>
                                                         <input type="number" step="any" min="0" value={state.contenido_por_envase}
                                                             onChange={(e) => updateLine(tempId, { contenido_por_envase: Number(e.target.value) })}
                                                             className="mt-1.5 flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
