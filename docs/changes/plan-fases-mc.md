@@ -581,6 +581,21 @@ MC-6 y MC-8 pueden hacerse en paralelo con MC-2/MC-3/MC-4 (no dependen entre si)
 
 ---
 
+## Checklist pre go-live
+
+Tareas obligatorias antes de abrir el sistema a usuarios reales. No están en ninguna MC porque son transversales.
+
+| # | Tarea | Estado | Notas |
+|---|-------|--------|-------|
+| P-1 | **MC-0-Admin**: `is_super_admin` flag + tenant WeScaleOps separado (Maxi no debe ser usuario del tenant del cliente) | ⏳ Pendiente | Ver `memory/project_super_admin.md` |
+| P-2 | **Alta de usuarios**: botón "Invitar" en `/admin/usuarios` via `supabase.auth.admin.inviteUserByEmail()` | ⏳ Pendiente | Prerequisito de P-1 |
+| P-3 | **`CRON_SECRET`**: generar secret + añadir a Vercel env + `UPDATE erp_app_settings` en Supabase | ⏳ Pendiente | Sin esto, los pedidos programados no se envían |
+| P-4 | **Redis en extractor**: confirmar que Redis corre en Oracle y `REDIS_URL` está en `.env` del extractor | ⏳ Pendiente | Sin esto, polling de job_status falla en multi-worker |
+| P-5 | **Updates en tiempo real** (Supabase Realtime): sin esto, el usuario no ve documentos/pedidos nuevos sin refrescar la página manualmente. Aplicar en `/documentos`, `/pedidos`, `/admin/revision` como mínimo. Patrón: hook `useRealtimeRefresh(table)` que llama `router.refresh()` al recibir INSERT/UPDATE via `supabase.channel().on('postgres_changes', ...)` | ⏳ Pendiente | UX básica esperada por cualquier usuario web |
+| P-6 | **Prueba de carga** (~100 documentos reales) para validar extractor, auto-aprobación y revisión antes de uso masivo | ⏳ Pendiente | Hacer en las primeras semanas con el cliente |
+
+---
+
 ## Regla de trabajo por sesion
 
 1. Leer memoria (estado del plan)
