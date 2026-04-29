@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useTransition } from 'react'
+import { useState, useRef, useTransition, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -18,6 +18,7 @@ import {
     ClipboardList,
     ScanLine,
     X,
+    AlertTriangle,
 } from 'lucide-react'
 import type { VenueInfo, PendingOrder, PendingOrderLine } from '@/app/actions/recepcion'
 import { anonRegisterDelivery } from '@/app/actions/recepcion'
@@ -71,11 +72,63 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     const [isPending, startTransition]      = useTransition()
     const [isSubmitting, setIsSubmitting]   = useState(false)
     const [lightboxSrc, setLightboxSrc]     = useState<string | null>(null)
+    const [jobId, setJobId]                 = useState<string | null>(null)
+    const [jobStatus, setJobStatus]         = useState<'polling' | 'success' | 'duplicate' | 'failed' | 'timeout' | null>(null)
+    const pollingRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+    const pollCountRef = useRef(0)
 
     // ── Scanner state ─────────────────────────────────────────────────────────
     const [scanContext, setScanContext] = useState<ScanContext>(null)
 
     const fileInputRef = useRef<HTMLInputElement>(null)
+
+    // ── Job polling ───────────────────────────────────────────────────────────
+
+    useEffect(() => {
+        if (!jobId) return
+        const MAX_POLLS = 36 // 3 min a 5s
+        pollCountRef.current = 0
+        setJobStatus('polling')
+
+        pollingRef.current = setInterval(async () => {
+            pollCountRef.current += 1
+            try {
+                const res = await fetch(`/api/job-status/${jobId}`, { cache: 'no-store' })
+                const data = await res.json()
+                if (data.status === 'success') {
+                    clearInterval(pollingRef.current!)
+                    setJobStatus('success')
+                    setSuccessMsg(
+                        data.auto_approval
+                            ? 'Documento aprobado automáticamente.'
+                            : 'Documento enviado. Pendiente de revisión.'
+                    )
+                } else if (data.status === 'duplicate') {
+                    clearInterval(pollingRef.current!)
+                    setJobStatus('duplicate')
+                    setSuccessMsg(data.message || 'Documento ya procesado anteriormente.')
+                } else if (data.status === 'failed') {
+                    clearInterval(pollingRef.current!)
+                    setJobStatus('failed')
+                    setSuccessMsg(data.error || 'Error durante la extracción.')
+                } else if (pollCountRef.current >= MAX_POLLS) {
+                    clearInterval(pollingRef.current!)
+                    setJobStatus('timeout')
+                    setSuccessMsg('Puede tardar unos minutos en aparecer en la lista.')
+                }
+            } catch {
+                if (pollCountRef.current >= MAX_POLLS) {
+                    clearInterval(pollingRef.current!)
+                    setJobStatus('timeout')
+                    setSuccessMsg('Puede tardar unos minutos en aparecer en la lista.')
+                }
+            }
+        }, 5000)
+
+        return () => {
+            if (pollingRef.current) clearInterval(pollingRef.current)
+        }
+    }, [jobId])
 
     // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -146,9 +199,10 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                 return
             }
 
+            if (data.jobId) setJobId(data.jobId)
             setSuccessMsg(
                 photo
-                    ? 'Foto enviada correctamente. El documento se procesará en unos minutos y las cantidades se actualizarán automáticamente.'
+                    ? 'Foto enviada. El documento se está procesando...'
                     : 'Observaciones registradas.'
             )
             setStep('success')
@@ -185,6 +239,9 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     }
 
     function handleReset() {
+        if (pollingRef.current) clearInterval(pollingRef.current)
+        setJobId(null)
+        setJobStatus(null)
         setStep('orders')
         setSelectedOrder(null)
         setPhoto(null)
@@ -315,7 +372,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
             )}
 
             {step === 'success' && (
-                <SuccessView message={successMsg} onReset={handleReset} />
+                <SuccessView message={successMsg} jobStatus={jobStatus} onReset={handleReset} />
             )}
 
             {step === 'error' && (
@@ -860,14 +917,37 @@ function ManualQtyView({
 
 // ─── Success / Error views ────────────────────────────────────────────────────
 
-function SuccessView({ message, onReset }: { message: string; onReset: () => void }) {
+function SuccessView({ message, jobStatus, onReset }: {
+    message: string
+    jobStatus: 'polling' | 'success' | 'duplicate' | 'failed' | 'timeout' | null
+    onReset: () => void
+}) {
+    const isPolling = jobStatus === 'polling' || jobStatus === null
+
+    const icon = isPolling
+        ? <Loader2 className="mx-auto mb-4 h-14 w-14 animate-spin text-muted-foreground" />
+        : jobStatus === 'duplicate'
+        ? <AlertTriangle className="mx-auto mb-4 h-14 w-14 text-amber-500" />
+        : jobStatus === 'failed'
+        ? <AlertCircle className="mx-auto mb-4 h-14 w-14 text-destructive" />
+        : <CheckCircle className="mx-auto mb-4 h-14 w-14 text-green-500" />
+
+    const title = jobStatus === 'duplicate'
+        ? 'Documento duplicado'
+        : jobStatus === 'failed'
+        ? 'Error en el procesamiento'
+        : '¡Recepción confirmada!'
+
     return (
         <div className="py-12 text-center">
-            <CheckCircle className="mx-auto mb-4 h-14 w-14 text-green-500" />
-            <h2 className="text-xl font-semibold">¡Recepción confirmada!</h2>
+            {icon}
+            <h2 className="text-xl font-semibold">{title}</h2>
             <p className="mt-2 text-sm text-muted-foreground">{message}</p>
             <Button className="mt-8 w-full" variant="outline" onClick={onReset}>
-                Volver a pedidos
+                {isPolling
+                    ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Procesando...</>
+                    : 'Volver a pedidos'
+                }
             </Button>
         </div>
     )
