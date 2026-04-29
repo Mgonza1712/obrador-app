@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { getOrderDetail } from '@/app/actions/pedidos'
+import { getOrderDetail, getOrderLinkedDocuments } from '@/app/actions/pedidos'
 import OrderDetailClient from '../_components/OrderDetailClient'
 
 export default async function PedidoDetailPage({
@@ -30,7 +30,7 @@ export default async function PedidoDetailPage({
 
     if (!order) return notFound()
 
-    const [activePricesResult, aliasFormatsResult] = await Promise.all([
+    const [activePricesResult, aliasFormatsResult, linkedDocuments] = await Promise.all([
         (supabase as any)
             .from('erp_price_history')
             .select('master_item_id, provider_id, unit_price, is_preferred, erp_providers(name, channel)')
@@ -38,6 +38,7 @@ export default async function PedidoDetailPage({
         (supabase as any)
             .from('erp_item_aliases')
             .select('master_item_id, provider_id, formato_compra'),
+        getOrderLinkedDocuments(id),
     ])
 
     return (
@@ -48,6 +49,7 @@ export default async function PedidoDetailPage({
             activePrices={activePricesResult.data ?? []}
             aliasFormats={aliasFormatsResult.data ?? []}
             venues={venuesResult.data ?? []}
+            linkedDocuments={linkedDocuments}
         />
     )
 }

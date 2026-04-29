@@ -1,7 +1,7 @@
 # Módulo de Pedidos — Comportamiento y Diseño
 
-**Última actualización:** 2026-04-25
-**Estado:** MC-2 completo (pedidos web + envío multicanal)
+**Última actualización:** 2026-04-29
+**Estado:** MC-4 completo (matching pedido↔documento + discrepancias)
 
 ---
 
@@ -248,3 +248,57 @@ También accessible desde el QR permanente por local (`/recepcion/{venue_token}`
 | Cancelar pedido | Borrador | Marca `cancelled` |
 | Registrar recepción | Enviado | Actualiza `qty_received` por línea |
 | Cancelar líneas pendientes | Enviado, parcial | Marca líneas como `is_cancelled` |
+| Tab Discrepancias | Enviado | Ver documentos vinculados + reporte discrepancias |
+| Vincular documento | Enviado (tab Discrepancias) | `linkDocumentToOrder` — manual por ID |
+| Desvincular documento | Enviado (tab Discrepancias) | `unlinkDocumentFromOrder` |
+
+---
+
+## 12. Matching pedido↔documento (MC-4)
+
+### Cómo funciona el matching automático
+
+El sistema vincula automáticamente un documento (albarán procesado por el extractor) a un pedido.
+
+**Disparador:** `POST /api/matching` llamado por n8n tras `procesar_factura_completa_v4`.
+
+**Algoritmo (`matchOrderToDocument`):**
+1. Lee el `provider_id` del documento
+2. Busca líneas de documento con `master_item_id` conocido
+3. Encuentra pedidos con `status='sent'` + `delivery_status IN ('pending','partially_delivered')` del mismo proveedor
+4. Calcula score = líneas del doc con `master_item_id` en el pedido / total líneas del doc con master_item_id
+5. Si el mejor score > 0.5 → crea fila en `erp_order_documents`
+6. Si ya existe el vínculo → no duplica
+
+### Tabla erp_order_documents
+
+```
+erp_order_documents
+  order_id     FK → erp_purchase_orders
+  document_id  FK → erp_documents
+  match_score  NUMERIC (0-1, null si vinculado manualmente)
+  linked_by    TEXT ('auto' | 'manual')
+  created_at
+```
+
+### Reporte de discrepancias
+
+`generateDiscrepancyReport(orderId, documentId)` compara líneas por `master_item_id`:
+
+| Tipo | Significado |
+|---|---|
+| `ok` | Mismo producto, misma cantidad |
+| `qty_diff` | Mismo producto, cantidad distinta (diferencia positiva = extra, negativa = faltante) |
+| `extra` | En el documento pero no en el pedido |
+| `missing` | En el pedido pero no en el documento |
+
+El reporte se genera bajo demanda (click "Ver discrepancias") para no hacer queries innecesarias.
+
+### Integración n8n pendiente
+
+En el workflow "Pizca - Extraction Callback" (ID: w7IIm2Mojb3v0pm7), añadir nodo HTTP después del nodo SQL v4:
+
+```
+POST https://obrador.wescaleops.com/api/matching
+Body: { "document_id": "{{$json.document_id}}", "secret": "{{$env.CRON_SECRET}}" }
+```

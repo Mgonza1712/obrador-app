@@ -20,7 +20,8 @@ import SendOrderButton from './SendOrderButton'
 import UnmatchedLineRow from './UnmatchedLineRow'
 import AddProductsPanel from './AddProductsPanel'
 import SchedulingPanel from './SchedulingPanel'
-import type { OrderDetail, OrderLineDetail, DeliveryStatus } from '@/app/actions/pedidos'
+import DiscrepanciasTab from './DiscrepanciasTab'
+import type { OrderDetail, OrderLineDetail, DeliveryStatus, LinkedDocument } from '@/app/actions/pedidos'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,7 @@ interface Props {
     activePrices: ActivePrice[]
     aliasFormats: AliasFormat[]
     venues: { id: string; name: string }[]
+    linkedDocuments: LinkedDocument[]
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -646,7 +648,7 @@ function ProviderGroup({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function OrderDetailClient({ order, masterItems, providers, activePrices, aliasFormats, venues }: Props) {
+export default function OrderDetailClient({ order, masterItems, providers, activePrices, aliasFormats, venues, linkedDocuments }: Props) {
     const router = useRouter()
     const [isPending, startTransition] = useTransition()
     const [lines, setLines] = useState<OrderLineDetail[]>(order.lines)
@@ -662,6 +664,7 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
     const [showDeliverySection, setShowDeliverySection] = useState(true)
     const [providerNotes, setProviderNotes] = useState<Record<string, string>>(order.provider_notes ?? {})
     const [venueId, setVenueId] = useState<string | null>(order.venue_id)
+    const [activeTab, setActiveTab] = useState<'lineas' | 'discrepancias'>('lineas')
     const [confirmDialog, setConfirmDialog] = useState<{
         title: string
         description: string
@@ -1032,6 +1035,47 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                 />
             </div>
 
+            {/* Tab navigation — only for sent orders */}
+            {isSent && (
+                <div className="flex gap-1 rounded-lg border border-border bg-muted/30 p-1 w-fit">
+                    <button
+                        onClick={() => setActiveTab('lineas')}
+                        className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                            activeTab === 'lineas'
+                                ? 'bg-background text-foreground shadow-sm'
+                                : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                    >
+                        <Package className="h-3.5 w-3.5" />
+                        Líneas
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('discrepancias')}
+                        className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                            activeTab === 'discrepancias'
+                                ? 'bg-background text-foreground shadow-sm'
+                                : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                    >
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        Discrepancias
+                        {linkedDocuments.length > 0 && (
+                            <span className="ml-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-orange-100 px-1 text-xs font-medium text-orange-700">
+                                {linkedDocuments.length}
+                            </span>
+                        )}
+                    </button>
+                </div>
+            )}
+
+            {/* Discrepancias tab content */}
+            {isSent && activeTab === 'discrepancias' && (
+                <DiscrepanciasTab orderId={order.id} initialLinkedDocuments={linkedDocuments} />
+            )}
+
+            {/* Lines tab content */}
+            {(!isSent || activeTab === 'lineas') && (<>
+
             {/* Unmatched warning */}
             {unmatchedCount > 0 && isDraft && (
                 <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:bg-amber-950 dark:text-amber-300">
@@ -1172,6 +1216,8 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                     onMerged={handleMerged}
                 />
             )}
+
+            </>)} {/* end lines tab content */}
 
             {/* Toast */}
             {toast && (

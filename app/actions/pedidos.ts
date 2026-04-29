@@ -914,6 +914,270 @@ export async function notifyOrderModification(orderId: string): Promise<ActionRe
     }
 }
 
+// ─── MC-4: Matching + Discrepancias ──────────────────────────────────────────
+
+export interface LinkedDocument {
+    order_id: string
+    document_id: string
+    match_score: number | null
+    linked_by: string | null
+    created_at: string
+    document: {
+        id: string
+        doc_type: string
+        document_number: string | null
+        document_date: string | null
+        total_amount: number | null
+        status: string | null
+        venue_name: string | null
+    }
+}
+
+export type DiscrepancyType = 'ok' | 'qty_diff' | 'extra' | 'missing'
+
+export interface DiscrepancyLine {
+    type: DiscrepancyType
+    master_item_id: string | null
+    name: string
+    qty_ordered: number | null
+    qty_document: number | null
+    difference: number | null
+    unit: string | null
+    order_line_id: string | null
+    document_line_id: string | null
+}
+
+export interface DiscrepancyReport {
+    order_id: string
+    document_id: string
+    lines: DiscrepancyLine[]
+    summary: { ok: number; qty_diff: number; extra: number; missing: number }
+}
+
+export async function matchOrderToDocument(
+    documentId: string
+): Promise<{ orderId: string | null; score: number | null }> {
+    const supabase = await createClient()
+    const sb = supabase as any
+
+    // Get document provider
+    const { data: doc } = await sb
+        .from('erp_documents')
+        .select('id, provider_id')
+        .eq('id', documentId)
+        .single()
+
+    if (!doc?.provider_id) return { orderId: null, score: null }
+
+    // Get document lines that have a master_item_id
+    const { data: docLines } = await sb
+        .from('erp_purchase_lines')
+        .select('id, master_item_id, quantity')
+        .eq('document_id', documentId)
+        .not('master_item_id', 'is', null)
+
+    if (!docLines || docLines.length === 0) return { orderId: null, score: null }
+
+    const docItemIds = new Set<string>(docLines.map((l: any) => l.master_item_id))
+    const totalDocLines = docLines.length
+
+    // Find eligible orders (sent, not yet fully delivered) that have lines from this provider
+    const { data: orderLines } = await sb
+        .from('erp_purchase_order_lines')
+        .select('order_id, master_item_id')
+        .eq('provider_id', doc.provider_id)
+        .eq('is_cancelled', false)
+        .not('master_item_id', 'is', null)
+
+    if (!orderLines || orderLines.length === 0) return { orderId: null, score: null }
+
+    // Get unique order IDs that are in eligible status
+    const candidateOrderIds = [...new Set<string>(orderLines.map((l: any) => l.order_id))]
+    const { data: eligibleOrders } = await sb
+        .from('erp_purchase_orders')
+        .select('id')
+        .in('id', candidateOrderIds)
+        .eq('status', 'sent')
+        .in('delivery_status', ['pending', 'partially_delivered'])
+
+    if (!eligibleOrders || eligibleOrders.length === 0) return { orderId: null, score: null }
+
+    const eligibleIds = new Set<string>(eligibleOrders.map((o: any) => o.id))
+
+    // Score each eligible order
+    const scoreByOrder: Record<string, number> = {}
+    for (const line of orderLines as any[]) {
+        if (!eligibleIds.has(line.order_id)) continue
+        if (!scoreByOrder[line.order_id]) scoreByOrder[line.order_id] = 0
+        if (docItemIds.has(line.master_item_id)) {
+            scoreByOrder[line.order_id] += 1
+        }
+    }
+
+    // Normalize scores
+    let bestOrderId: string | null = null
+    let bestScore = 0
+    for (const [orderId, matchCount] of Object.entries(scoreByOrder)) {
+        const score = matchCount / totalDocLines
+        if (score > bestScore) {
+            bestScore = score
+            bestOrderId = orderId
+        }
+    }
+
+    if (bestScore < 0.5 || !bestOrderId) return { orderId: null, score: bestScore }
+
+    // Check if link already exists
+    const { data: existing } = await sb
+        .from('erp_order_documents')
+        .select('order_id')
+        .eq('order_id', bestOrderId)
+        .eq('document_id', documentId)
+        .maybeSingle()
+
+    if (!existing) {
+        await sb.from('erp_order_documents').insert({
+            order_id: bestOrderId,
+            document_id: documentId,
+            match_score: bestScore,
+            linked_by: 'auto',
+        })
+    }
+
+    revalidatePath(`/pedidos/${bestOrderId}`)
+    return { orderId: bestOrderId, score: bestScore }
+}
+
+export async function getOrderLinkedDocuments(orderId: string): Promise<LinkedDocument[]> {
+    const supabase = await createClient()
+    const sb = supabase as any
+
+    const { data, error } = await sb
+        .from('erp_order_documents')
+        .select(`
+            order_id, document_id, match_score, linked_by, created_at,
+            erp_documents(id, doc_type, document_number, document_date, total_amount, status, erp_venues(name))
+        `)
+        .eq('order_id', orderId)
+        .order('created_at', { ascending: false })
+
+    if (error || !data) return []
+
+    return (data as any[]).map((row) => ({
+        order_id: row.order_id,
+        document_id: row.document_id,
+        match_score: row.match_score,
+        linked_by: row.linked_by,
+        created_at: row.created_at,
+        document: {
+            id: row.erp_documents.id,
+            doc_type: row.erp_documents.doc_type,
+            document_number: row.erp_documents.document_number,
+            document_date: row.erp_documents.document_date,
+            total_amount: row.erp_documents.total_amount,
+            status: row.erp_documents.status,
+            venue_name: row.erp_documents.erp_venues?.name ?? null,
+        },
+    }))
+}
+
+export async function generateDiscrepancyReport(
+    orderId: string,
+    documentId: string
+): Promise<DiscrepancyReport> {
+    const supabase = await createClient()
+    const sb = supabase as any
+
+    const [{ data: orderLines }, { data: docLines }] = await Promise.all([
+        sb.from('erp_purchase_order_lines')
+            .select('id, master_item_id, raw_text, quantity, unit, is_cancelled, erp_master_items(official_name, base_unit)')
+            .eq('order_id', orderId)
+            .eq('is_cancelled', false),
+        sb.from('erp_purchase_lines')
+            .select('id, master_item_id, raw_name, quantity, erp_master_items(official_name, base_unit)')
+            .eq('document_id', documentId),
+    ])
+
+    const lines: DiscrepancyLine[] = []
+    const orderMap = new Map<string, any>()
+    for (const ol of (orderLines ?? []) as any[]) {
+        if (ol.master_item_id) orderMap.set(ol.master_item_id, ol)
+    }
+
+    const docMap = new Map<string, any>()
+    for (const dl of (docLines ?? []) as any[]) {
+        if (dl.master_item_id) docMap.set(dl.master_item_id, dl)
+    }
+
+    // Lines present in document
+    for (const dl of (docLines ?? []) as any[]) {
+        const name = dl.erp_master_items?.official_name ?? dl.raw_name ?? '—'
+        const unit = dl.erp_master_items?.base_unit ?? null
+        if (!dl.master_item_id) {
+            lines.push({ type: 'extra', master_item_id: null, name, qty_ordered: null, qty_document: dl.quantity, difference: null, unit, order_line_id: null, document_line_id: dl.id })
+            continue
+        }
+        const ol = orderMap.get(dl.master_item_id)
+        if (!ol) {
+            lines.push({ type: 'extra', master_item_id: dl.master_item_id, name, qty_ordered: null, qty_document: dl.quantity, difference: null, unit, order_line_id: null, document_line_id: dl.id })
+        } else {
+            const diff = dl.quantity - ol.quantity
+            lines.push({ type: diff === 0 ? 'ok' : 'qty_diff', master_item_id: dl.master_item_id, name, qty_ordered: ol.quantity, qty_document: dl.quantity, difference: diff, unit, order_line_id: ol.id, document_line_id: dl.id })
+        }
+    }
+
+    // Order lines not in document
+    for (const ol of (orderLines ?? []) as any[]) {
+        if (!ol.master_item_id) continue
+        if (!docMap.has(ol.master_item_id)) {
+            const name = ol.erp_master_items?.official_name ?? ol.raw_text ?? '—'
+            lines.push({ type: 'missing', master_item_id: ol.master_item_id, name, qty_ordered: ol.quantity, qty_document: null, difference: null, unit: ol.unit ?? ol.erp_master_items?.base_unit ?? null, order_line_id: ol.id, document_line_id: null })
+        }
+    }
+
+    const summary = { ok: 0, qty_diff: 0, extra: 0, missing: 0 }
+    for (const l of lines) summary[l.type]++
+
+    return { order_id: orderId, document_id: documentId, lines, summary }
+}
+
+export async function linkDocumentToOrder(
+    orderId: string,
+    documentId: string
+): Promise<ActionResult> {
+    const supabase = await createClient()
+    const sb = supabase as any
+
+    const { error } = await sb.from('erp_order_documents').upsert(
+        { order_id: orderId, document_id: documentId, linked_by: 'manual', match_score: null },
+        { onConflict: 'order_id,document_id' }
+    )
+
+    if (error) return { success: false, error: error.message }
+    revalidatePath(`/pedidos/${orderId}`)
+    return { success: true }
+}
+
+export async function unlinkDocumentFromOrder(
+    orderId: string,
+    documentId: string
+): Promise<ActionResult> {
+    const supabase = await createClient()
+    const sb = supabase as any
+
+    const { error } = await sb
+        .from('erp_order_documents')
+        .delete()
+        .eq('order_id', orderId)
+        .eq('document_id', documentId)
+
+    if (error) return { success: false, error: error.message }
+    revalidatePath(`/pedidos/${orderId}`)
+    return { success: true }
+}
+
+// ─── Recurrence ───────────────────────────────────────────────────────────────
+
 export async function setRecurrence(
     orderId: string,
     cron: string | null,

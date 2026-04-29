@@ -1,7 +1,17 @@
 # Plan de Fases MC — Modulo de Compras Rediseñado
 
-**Fecha:** 2026-04-23 (actualizado 2026-04-27)
-**Estado:** MC-1 COMPLETA. MC-2 COMPLETA. MC-3 COMPLETA + fixes post-sesion. Proximo: MC-4.
+**Fecha:** 2026-04-23 (actualizado 2026-04-29)
+**Estado:** MC-1 COMPLETA. MC-2 COMPLETA. MC-3 COMPLETA + fixes post-sesion. MC-4 COMPLETA. Proximo: MC-5.
+
+### MC-4 completada (2026-04-29)
+- **`matchOrderToDocument(documentId)`**: server action en `app/actions/pedidos.ts`. Busca pedidos `status=sent` + `delivery_status IN (pending, partially_delivered)` del mismo proveedor. Score = lineas doc con master_item_id en pedido / total lineas doc. Vincula si score > 0.5.
+- **`getOrderLinkedDocuments(orderId)`**: devuelve documentos vinculados con metadata del documento.
+- **`generateDiscrepancyReport(orderId, documentId)`**: compara por master_item_id → categorias ok/qty_diff/extra/missing.
+- **`linkDocumentToOrder` / `unlinkDocumentFromOrder`**: vinculacion/desvinculacion manual.
+- **`DiscrepanciasTab`**: componente en `app/(dashboard)/pedidos/_components/`. Muestra documentos vinculados, reporte de discrepancias on-demand, vincular manualmente.
+- **Tab "Discrepancias"** en `/pedidos/[id]`: visible solo para pedidos `sent`. Badge con count de documentos vinculados.
+- **`POST /api/matching`**: endpoint para que n8n llame tras `procesar_factura_completa_v4`. Auth via `CRON_SECRET`. Body: `{ document_id, secret }`.
+- **Nota n8n**: añadir llamada a `POST /api/matching` en el workflow de extracción, tras la llamada a `procesar_factura_completa_v4`.
 
 ### Fixes post-MC-3 (2026-04-27)
 - **pg_cron**: `process_scheduled_orders()` + `compute_next_run_at()` instaladas en Supabase. Cron job activo cada minuto (job id 1). Requiere: `CRON_SECRET` en Vercel env + actualizar `erp_app_settings.cron_secret`.
@@ -567,7 +577,7 @@ Mejorar el extractor con hints del pedido, extraccion de descuentos, y mejor man
 | MC-1 | ~~1~~ COMPLETA (2026-04-23) | — |
 | MC-2 | ~~1-2~~ COMPLETA (2026-04-24/26) | MC-1 |
 | MC-3 | ~~1-2~~ COMPLETA (2026-04-26) | MC-1 |
-| MC-4 | 1 | MC-2, MC-3 |
+| MC-4 | ~~1~~ COMPLETA (2026-04-29) | MC-2, MC-3 |
 | MC-5 | 1-2 | MC-4 |
 | MC-6 | 1-2 | MC-1 |
 | MC-7 | 1 | MC-6 |
