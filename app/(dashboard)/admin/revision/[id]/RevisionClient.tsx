@@ -900,8 +900,8 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
             <div className="flex flex-col lg:flex-row gap-6 items-start">
 
                 {/* ── LEFT: Visor PDF — 50% ── */}
-                <div className="w-full lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] lg:flex-1 min-w-0 flex flex-col gap-4">
-                    <div className="flex-1 w-full border rounded-xl overflow-hidden bg-white shadow-sm flex flex-col">
+                <div className="w-full lg:sticky lg:top-4 lg:h-[calc(100vh-3rem)] lg:flex-1 min-w-0 flex flex-col gap-4">
+                    <div className="flex-1 w-full border rounded-xl overflow-hidden bg-white shadow-sm flex flex-col min-h-[500px]">
                         <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2.5 bg-card">
                             <div className="flex items-center gap-2">
                                 <FileText className="h-4 w-4 text-muted-foreground" />
@@ -925,17 +925,19 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                             </div>
                         ) : secureUrl ? (
                             /\.(jpe?g|png|webp)$/i.test(doc.drive_url ?? '') ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                    src={secureUrl}
-                                    alt="Documento escaneado"
-                                    className="w-full h-full object-contain"
-                                />
+                                <div className="flex-1 overflow-y-auto">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                        src={secureUrl}
+                                        alt="Documento escaneado"
+                                        className="w-full h-auto block"
+                                    />
+                                </div>
                             ) : (
                                 <iframe
                                     src={secureUrl}
                                     title="Documento PDF"
-                                    className="w-full h-full border-0"
+                                    className="w-full flex-1 border-0"
                                     allow="autoplay"
                                 />
                             )
