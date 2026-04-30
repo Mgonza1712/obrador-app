@@ -32,6 +32,7 @@ interface DocumentRevisionPayload {
         review_status?: string | null
         ai_interpretation?: Record<string, unknown> | null
         is_preferred: boolean
+        iva_percent?: number | null
         resolution:
         | { action: 'skip' }
         | { action: 'link_existing'; master_item_id: string }
@@ -181,7 +182,11 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                 }
 
                 if (existingAlias) {
-                    await supabase.from('erp_item_aliases').update(aliasPayload).eq('id', existingAlias.id)
+                    // Para líneas auto_approved el alias ya existe con datos correctos del ciclo anterior.
+                    // No sobrescribir con los campos nulos del normalization_step que el extractor deja en null para productos conocidos.
+                    if (line.review_status !== 'auto_approved') {
+                        await supabase.from('erp_item_aliases').update(aliasPayload).eq('id', existingAlias.id)
+                    }
                 } else {
                     await supabase.from('erp_item_aliases').insert(aliasPayload)
                 }
@@ -211,8 +216,21 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
             if (finalMasterItemId && finalProviderId && line.unit_price != null && line.resolution.action !== 'skip') {
                 const venueId = payload.document.venue_id
                 const effectiveDate = payload.document.document_date
+
+                // Usar datos de formato del alias para cálculos de costo precisos.
+                // Para líneas auto_approved el normalization_step tiene campos nulos;
+                // el alias tiene la data correcta del ciclo de aprendizaje anterior.
+                const { data: aliasFormat } = await supabase
+                    .from('erp_item_aliases')
+                    .select('envases_por_formato, contenido_por_envase')
+                    .eq('master_item_id', finalMasterItemId)
+                    .eq('provider_id', finalProviderId)
+                    .maybeSingle()
+
+                const effectiveEnvases = (aliasFormat ? Number(aliasFormat.envases_por_formato) : line.envases_por_formato) || 1
+                const effectiveContenido = (aliasFormat ? Number(aliasFormat.contenido_por_envase) : line.contenido_por_envase) || 1
+
                 // Buscar el precio más reciente (activo o archivado) para comparar
-                // Esto evita duplicados en líneas auto_approved (la SQL ya archivó el activo anterior)
                 const { data: latestPrice } = await supabase
                     .from('erp_price_history')
                     .select('id, unit_price, is_preferred, status')
@@ -222,10 +240,9 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                     .limit(1)
                     .maybeSingle()
 
-                // Si el precio más reciente es igual al que manda el operario → no hacer nada
                 if (latestPrice && Math.abs(Number(latestPrice.unit_price) - (line.unit_price ?? 0)) < 0.001) {
-                    // Solo actualizar is_preferred si el activo existe y cambió
-                    const { data: activeForPreferred } = await supabase
+                    // Precio sin cambios: actualizar metadata (costos corregidos, is_preferred, document_id, iva_percent)
+                    const { data: activePrice } = await supabase
                         .from('erp_price_history')
                         .select('id, is_preferred')
                         .eq('master_item_id', finalMasterItemId)
@@ -233,27 +250,35 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                         .eq('status', priceHistoryStatus)
                         .maybeSingle()
 
-                    if (activeForPreferred && activeForPreferred.is_preferred !== line.is_preferred) {
-                        await supabase
-                            .from('erp_price_history')
-                            .update({ is_preferred: line.is_preferred })
-                            .eq('id', activeForPreferred.id)
+                    if (activePrice) {
+                        const updates: Record<string, unknown> = {
+                            document_id: payload.document.id,
+                            cost_per_base_unit: line.unit_price / (effectiveEnvases * effectiveContenido),
+                            cost_per_packaged_unit: line.unit_price / effectiveEnvases,
+                        }
+                        if (line.iva_percent != null) updates.iva_percent = line.iva_percent
 
-                        if (line.is_preferred) {
+                        // Solo promover is_preferred, nunca degradar:
+                        // el default false del UI para productos conocidos no indica intención del usuario de quitarlo.
+                        if (line.is_preferred && !activePrice.is_preferred) {
+                            updates.is_preferred = true
                             await supabase
                                 .from('erp_price_history')
                                 .update({ is_preferred: false })
                                 .eq('master_item_id', finalMasterItemId)
                                 .eq('status', priceHistoryStatus)
-                                .neq('id', activeForPreferred.id)
+                                .neq('id', activePrice.id)
                         }
+
+                        await supabase
+                            .from('erp_price_history')
+                            .update(updates)
+                            .eq('id', activePrice.id)
                     }
                     continue
                 }
 
-                // Precio cambió (o no hay precio previo): archivar el activo actual e insertar el nuevo
-
-                // Buscar el precio activo actual de este proveedor para archivar y heredar is_preferred
+                // Precio cambió (o no hay precio previo): archivar el activo e insertar el nuevo
                 const { data: currentActive } = await supabase
                     .from('erp_price_history')
                     .select('id, is_preferred')
@@ -262,7 +287,6 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                     .eq('status', priceHistoryStatus)
                     .maybeSingle()
 
-                // Verificar si hay algún precio activo para este master_item (para saber si es el primero)
                 const { count: anyActivePriceCount } = await supabase
                     .from('erp_price_history')
                     .select('id', { count: 'exact', head: true })
@@ -270,12 +294,10 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                     .eq('status', priceHistoryStatus)
 
                 const isAbsolutelyFirstPrice = (anyActivePriceCount ?? 0) === 0
-
-                // is_preferred a heredar: del activo actual si existe, del latestPrice si no
                 const inheritedPreferred = currentActive?.is_preferred ?? latestPrice?.is_preferred ?? false
-                const finalIsPreferred = line.is_preferred ?? inheritedPreferred
+                // Usar || para heredar is_preferred: el default false del payload no debe anular un is_preferred=true existente
+                const finalIsPreferred = line.is_preferred || inheritedPreferred
 
-                // Archivar precio activo anterior de ESTE proveedor
                 await supabase
                     .from('erp_price_history')
                     .update({ status: 'archived' })
@@ -283,9 +305,7 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                     .eq('provider_id', finalProviderId)
                     .eq('status', priceHistoryStatus)
 
-                // Si el nuevo precio es preferido, quitar is_preferred de otros proveedores
-                const newIsPreferred = finalIsPreferred
-                if (newIsPreferred || isAbsolutelyFirstPrice) {
+                if (finalIsPreferred || isAbsolutelyFirstPrice) {
                     await supabase
                         .from('erp_price_history')
                         .update({ is_preferred: false })
@@ -294,7 +314,6 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                         .neq('provider_id', finalProviderId)
                 }
 
-                // Insertar nuevo precio
                 await supabase
                     .from('erp_price_history')
                     .insert({
@@ -302,11 +321,13 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                         provider_id: finalProviderId,
                         venue_id: venueId,
                         unit_price: line.unit_price,
-                        cost_per_packaged_unit: line.unit_price / (line.envases_por_formato || 1),
-                        cost_per_base_unit: line.unit_price / ((line.envases_por_formato || 1) * (line.contenido_por_envase || 1)),
+                        cost_per_packaged_unit: line.unit_price / effectiveEnvases,
+                        cost_per_base_unit: line.unit_price / (effectiveEnvases * effectiveContenido),
                         effective_date: effectiveDate,
                         status: priceHistoryStatus,
-                        is_preferred: newIsPreferred || isAbsolutelyFirstPrice,
+                        is_preferred: finalIsPreferred || isAbsolutelyFirstPrice,
+                        iva_percent: line.iva_percent ?? null,
+                        document_id: payload.document.id,
                     })
             }
 

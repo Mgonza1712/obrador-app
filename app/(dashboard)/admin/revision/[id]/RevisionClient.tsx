@@ -699,7 +699,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
     }
 
     async function buildAndSubmit() {
-        const buildLineEntry = (id: string, rawName: string | null, reviewStatus: string | null, aiInterp: Record<string, unknown> | null, isNew: boolean) => {
+        const buildLineEntry = (id: string, rawName: string | null, reviewStatus: string | null, aiInterp: Record<string, unknown> | null, isNew: boolean, ivaPercent: number | null = null) => {
             const state = lineStates[id]
             const lineTotalCost = (state.quantity || 0) * (state.unit_price || 0)
             return {
@@ -725,6 +725,7 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                 review_status: reviewStatus,
                 ai_interpretation: aiInterp,
                 is_preferred: state.is_preferred,
+                iva_percent: ivaPercent,
             }
         }
 
@@ -744,7 +745,8 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
             lines: [
                 ...lines.map((line) => buildLineEntry(
                     line.id, line.raw_name, line.review_status ?? null,
-                    line.ai_interpretation as Record<string, unknown> | null, false
+                    line.ai_interpretation as Record<string, unknown> | null, false,
+                    line.iva_percent ?? null
                 )),
                 ...manualLineIds.map((tempId) => buildLineEntry(
                     tempId, lineStates[tempId]?.newItemName || null, 'pending_review', null, true
@@ -1492,8 +1494,17 @@ export default function RevisionClient({ document: doc, lines, masterItems, prov
                                                     </div>
 
                                                     {isPendingNew && (() => {
-                                                        const norm = (line.ai_interpretation?.normalization_step as Record<string, unknown> | null | undefined) ?? null
-                                                        const preview = buildCostPreview(state.unit_price, norm)
+                                                        const env = state.envases_por_formato || 1
+                                                        const cnt = state.contenido_por_envase || 1
+                                                        const dynamicNorm = {
+                                                            formato_compra: state.formato_compra,
+                                                            envases_por_formato: env,
+                                                            contenido_por_envase: cnt,
+                                                            base_unit: state.newItemBaseUnit,
+                                                            cost_per_packaged_unit: state.unit_price != null ? state.unit_price / env : null,
+                                                            cost_per_base_unit: state.unit_price != null ? state.unit_price / (env * cnt) : null,
+                                                        }
+                                                        const preview = buildCostPreview(state.unit_price, dynamicNorm)
                                                         return (
                                                             <div className="space-y-1.5">
                                                                 {preview && (

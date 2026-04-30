@@ -104,12 +104,11 @@ function ScannerContent() {
   useEffect(() => {
     if (!jobId) return;
 
-    const MAX_POLLS = 36; // 3 minutos a 5s por poll
+    const MAX_POLLS = 90; // 3 minutos a 2s por poll
     pollCountRef.current = 0;
 
-    pollingRef.current = setInterval(async () => {
+    const doPoll = async () => {
       pollCountRef.current += 1;
-
       try {
         const res = await fetch(`/api/job-status/${jobId}`, { cache: 'no-store' });
         const data = await res.json();
@@ -119,9 +118,9 @@ function ScannerContent() {
           setSubmitStatus('success');
           setDocId(data.document_id ?? null);
           setResultMessage(
-            data.auto_approval
+            data.message || (data.auto_approval
               ? 'Documento aprobado automáticamente.'
-              : 'Documento enviado. Pendiente de revisión.'
+              : 'Documento enviado. Pendiente de revisión.')
           );
           setStep('result');
         } else if (data.status === 'duplicate') {
@@ -133,7 +132,6 @@ function ScannerContent() {
           setSubmitStatus('error');
           setResultMessage(data.error || 'Error durante la extracción.');
         } else if (pollCountRef.current >= MAX_POLLS) {
-          // Timeout — el documento puede haberse procesado igual
           clearInterval(pollingRef.current!);
           setSubmitStatus('success');
           setDocId(null);
@@ -149,7 +147,11 @@ function ScannerContent() {
           setResultMessage('No se pudo obtener el estado. Verifica la lista de documentos.');
         }
       }
-    }, 5000);
+    };
+
+    // Poll inmediato al setear jobId, luego cada 2s — reduce latencia de ~5s a <100ms
+    doPoll();
+    pollingRef.current = setInterval(doPoll, 2000);
 
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);

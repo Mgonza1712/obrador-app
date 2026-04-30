@@ -16,7 +16,7 @@ Este documento es el contrato *entre sistemas*. La semántica de negocio (precio
   - tablas `erp_*`, `extraction_*`, `erp_channel_accounts`
   - vista `vw_catalogo_precios`
 
-Fecha de verificación: 2026-04-09. Última actualización: 2026-04-17 (pipeline async + iva_footer).
+Fecha de verificación: 2026-04-09. Última actualización: 2026-04-30 (observations, prompt_version, extraction_log patch, alias matching fix).
 
 ## Workflows n8n (estado actual)
 
@@ -47,10 +47,29 @@ Fuente: tabla Supabase `erp_channel_accounts` (RLS deshabilitado).
 ### 2) Llamar al extractor FastAPI (async)
 
 - Endpoint: `POST http://172.17.0.1:8001/extract`
-- Body: `{document_base64, document_type, tenant_id, filename, is_image}`
+- Body: `{document_base64, document_type, tenant_id, filename, is_image, observations?}`
 - **Respuesta inmediata** (<1s): `{status: “processing”, job_id: “<uuid>”}`
 
+`observations` es el campo de notas del operario introducido en el scanner. Viaja por el pipeline hasta `erp_documents.notes`.
+
 El extractor procesa en background (ThreadPoolExecutor, hasta 3 en paralelo) y llama al callback de n8n al terminar.
+
+#### Pipeline interno del extractor (`services/extractor.py`)
+
+El extractor ejecuta 5 pasos en cadena. Los pasos 3-5 dependen del resultado del paso 2:
+
+```
+1. Extraer cabecera (gpt-4o-mini, 1ª página / primeros 500 chars Markdown)
+   → obtener proveedor_nombre y tipo_documento
+2. resolve_provider_id() → busca UUID en erp_providers por nombre
+   → usa fuzz.token_set_ratio (robusto ante “S.L.” vs “SL”, “&” vs “y”)
+   → si falla → known_aliases = [] → todos los ítems aparecen como nuevos (fallo en cascada)
+3. get_known_aliases(provider_id) → aliases de ese proveedor desde erp_item_aliases
+4. Llamada principal (gpt-4o) → extracción + normalización con aliases como contexto
+5. match_items_in_memory() → safety net post-LLM, re-chequea matches por fuzzy
+```
+
+**Vulnerabilidad conocida:** Si el proveedor no se resuelve, `known_aliases = []` y todos los ítems se tratan como nuevos. Ver decisión pendiente `docs/decisions/2026-04-30-alias-fallback-tenant.md`.
 
 ### 3) Polling desde el scanner PWA
 
@@ -83,15 +102,30 @@ El `sql_payload` lo construye `build_sql_payload()` en `pizca-server/services/ex
     “local_receptor”: “...”,
     “tipo_documento”: “Factura | Albaran | Presupuesto | Factura Resumen”,
     “albaranes_vinculados”: [],
-    “iva_footer”: [{“tipo_iva”: 10, “base”: 72.03, “cuota”: 7.20}]
+    “iva_footer”: [{“tipo_iva”: 10, “base”: 72.03, “cuota”: 7.20}],
+    “observations”: “texto libre del operario o null”
   },
-  “items”: [...]
+  “items”: [
+    {
+      “raw_name”: “...”,
+      “cantidad_comprada”: 1.0,
+      “precio_unitario”: 12.50,
+      “precio_linea”: 12.50,
+      “iva_percent”: 10.0,
+      “alias_match”: true,
+      “master_item_id”: “uuid”,
+      “prompt_version”: “v4-text”,
+      ...
+    }
+  ]
 }
 ```
 
 Notas:
 - `precio_unitario` y `precio_linea` son **SIN IVA**.
 - `iva_footer` se extrae del pie del documento (más fiable que inferencia por línea).
+- `observations` llega desde el campo de notas del scanner; la función SQL lo persiste en `erp_documents.notes`.
+- `prompt_version` viaja en cada ítem individual; la función SQL lo lee con `item->>'prompt_version'`.
 - La estructura canónica de `SqlPayload` vive en `pizca-server/pizca-extractor/models/schemas.py`.
 
 ### 5) Ejecutar función SQL v4 en Supabase
@@ -118,6 +152,24 @@ Efectos principales (ver `docs/integrations/supabase.md` y `docs/domain/document
   - marca `review_reasons` en `ai_interpretation`
 - crea entradas en `erp_price_history` para líneas `auto_approved` con precio > 0
 - setea `erp_documents.status='approved'` si ninguna línea requiere revisión, si no `pending`
+
+### 5b) Notificar completion al extractor (`/job-complete/{job_id}`)
+
+n8n llama al endpoint `POST /job-complete/{job_id}` del extractor con:
+```json
+{
+  "status": "success | duplicate | failed",
+  "document_id": "uuid del erp_document creado",
+  "extraction_log_id": "uuid del extraction_log de este job",
+  "auto_approval": true,
+  "message": "...",
+  "error": null
+}
+```
+
+El extractor actualiza el job en Redis (para el polling del scanner) **y** parchea `extraction_logs.document_id` usando `extraction_log_id` + `document_id`. Esto resuelve el problema de que `extraction_logs.document_id` siempre era NULL (el log se crea antes del documento SQL).
+
+**Requisito en n8n:** El workflow "Pizca - Extraction Callback" debe incluir `extraction_log_id` (que viaja en el `ExtractionResult` del callback de FastAPI) en el body del POST a `/job-complete`.
 
 ### 6) Notificar resultado
 
