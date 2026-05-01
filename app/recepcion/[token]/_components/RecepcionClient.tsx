@@ -49,9 +49,13 @@ const N8N_SCANNER_URL = 'https://n8n.wescaleops.com/webhook/scanner-intake'
 
 async function compressImage(dataUrl: string): Promise<string> {
     const imageCompression = (await import('browser-image-compression')).default
-    const res = await fetch(dataUrl)
-    const blob = await res.blob()
-    const file = new File([blob], 'image.jpg', { type: 'image/jpeg' })
+    // Use atob instead of fetch(dataUrl) — more compatible with mobile browsers
+    const arr = dataUrl.split(',')
+    const mime = arr[0].match(/:(.*?);/)?.[1] ?? 'image/jpeg'
+    const bstr = atob(arr[1])
+    const u8arr = new Uint8Array(bstr.length)
+    for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i)
+    const file = new File([u8arr], 'image.jpg', { type: mime })
     const compressed = await imageCompression(file, {
         maxSizeMB: 1,
         maxWidthOrHeight: 1920,

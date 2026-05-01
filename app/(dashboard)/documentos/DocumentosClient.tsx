@@ -36,6 +36,7 @@ import {
 } from '@/components/ui/command'
 import type { DocumentRow } from './page'
 import type { Provider } from './_actions'
+import type { VenueOption } from './_components/UploadDropZone'
 
 // ── Badge helpers ─────────────────────────────────────────────────────────────
 
@@ -133,12 +134,14 @@ export default function DocumentosClient({
     page,
     pageSize,
     providers,
+    venues,
 }: {
     documents: DocumentRow[]
     total: number
     page: number
     pageSize: number
     providers: Provider[]
+    venues: VenueOption[]
 }) {
     const router = useRouter()
     const pathname = usePathname()
@@ -161,6 +164,7 @@ export default function DocumentosClient({
     const [statusInput, setStatusInput] = useState('')
     const [reconcStatusInput, setReconcStatusInput] = useState('')
     const [selectedProviderId, setSelectedProviderId] = useState('')
+    const [selectedVenueId, setSelectedVenueId] = useState('')
 
     // Read current search params as a snapshot for rendering defaultValues.
     // navigate() always re-reads window.location.search at call time to avoid
@@ -207,6 +211,7 @@ export default function DocumentosClient({
         setStatusInput(params.get('status') ?? '')
         setReconcStatusInput(params.get('reconciliation_status') ?? '')
         setSelectedProviderId(params.get('provider_id') ?? '')
+        setSelectedVenueId(params.get('venue_id') ?? '')
     }, [])
 
     // BUG FIX (filters): Read window.location.search at call time (not from closure)
@@ -252,6 +257,7 @@ export default function DocumentosClient({
         setStatusInput('')
         setReconcStatusInput('')
         setSelectedProviderId('')
+        setSelectedVenueId('')
         startTransition(() => {
             router.push(pathname)
         })
@@ -291,8 +297,9 @@ export default function DocumentosClient({
     const totalPages = Math.ceil(total / pageSize)
         const currentHasPendingLines = currentParams.get('has_pending_lines') === 'true'
 
+    const currentVenueId = currentParams.get('venue_id') ?? ''
     const hasActiveFilters = currentDocTypes.length > 0 || currentStatus || currentReconcStatus ||
-        currentProviderId || currentDateFrom || currentDateTo || currentAmountMin || currentAmountMax || currentDocNumber || currentHasPendingLines
+        currentProviderId || currentVenueId || currentDateFrom || currentDateTo || currentAmountMin || currentAmountMax || currentDocNumber || currentHasPendingLines
 
     return (
         <div className="space-y-4">
@@ -452,6 +459,24 @@ export default function DocumentosClient({
                                     </Command>
                                 </PopoverContent>
                             </Popover>
+                        </div>
+
+                        {/* Venue / Local */}
+                        <div>
+                            <label htmlFor="filter-venue" className="mb-1 block text-xs font-medium text-muted-foreground">
+                                Local
+                            </label>
+                            <select
+                                id="filter-venue"
+                                value={selectedVenueId}
+                                onChange={(e) => { setSelectedVenueId(e.target.value); navigate({ venue_id: e.target.value || null }) }}
+                                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                            >
+                                <option value="">Todos los locales</option>
+                                {venues.map(v => (
+                                    <option key={v.id} value={v.id}>{v.name}</option>
+                                ))}
+                            </select>
                         </div>
 
                         {/* Document number — own debounce ref */}
@@ -639,7 +664,12 @@ export default function DocumentosClient({
                                             {doc.document_number ?? <span className="text-muted-foreground">—</span>}
                                         </td>
                                         <td className="px-4 py-3">
-                                            {doc.provider_name ?? <span className="text-muted-foreground/60">Sin proveedor</span>}
+                                            <div>
+                                                {doc.provider_name ?? <span className="text-muted-foreground/60">Sin proveedor</span>}
+                                                {doc.venue_name && (
+                                                    <p className="text-xs text-muted-foreground mt-0.5">{doc.venue_name}</p>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="px-4 py-3 tabular-nums">
                                             {doc.document_date

@@ -38,6 +38,7 @@ export type DocumentFilters = {
     amountMax?: number | null
     documentNumber?: string
     docTypes?: string[]
+    venueId?: string | null
     /**
      * When true: restrict to documents that have at least one purchase_line
      * with review_status = 'skipped'. The caller (page.tsx) must pre-resolve this
@@ -81,6 +82,9 @@ export function applyDocumentFilters(query: any, filters: DocumentFilters) {
     }
     if (filters.documentNumber) {
         query = query.ilike('document_number', `%${filters.documentNumber}%`)
+    }
+    if (filters.venueId) {
+        query = query.eq('venue_id', filters.venueId)
     }
 
     const sortConfig = SORT_MAP[filters.sort ?? 'date_desc'] ?? SORT_MAP.date_desc

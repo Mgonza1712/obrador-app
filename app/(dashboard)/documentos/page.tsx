@@ -23,6 +23,8 @@ export type DocumentRow = {
     reconciliation_delta: number | null
     provider_id: string | null
     provider_name: string | null
+    venue_id: string | null
+    venue_name: string | null
     referenced_delivery_notes: string[] | null
     parent_invoice_id: string | null
     created_at: string
@@ -57,6 +59,7 @@ export default async function DocumentosPage({
     const docTypesRaw = params.doc_type as string | undefined
     const docTypes = docTypesRaw ? docTypesRaw.split(',').filter(Boolean) : []
     const hasPendingLines = params.has_pending_lines === 'true'
+    const venueId = (params.venue_id as string) ?? ''
 
     const providers = await getProviders()
 
@@ -86,7 +89,7 @@ export default async function DocumentosPage({
     let query = (supabase as any)
         .from('erp_documents')
         .select(
-            'id, doc_type, document_number, document_date, total_amount, status, reconciliation_status, reconciliation_delta, provider_id, referenced_delivery_notes, parent_invoice_id, created_at, erp_providers(name)',
+            'id, doc_type, document_number, document_date, total_amount, status, reconciliation_status, reconciliation_delta, provider_id, venue_id, referenced_delivery_notes, parent_invoice_id, created_at, erp_providers(name), erp_venues(name)',
             { count: 'exact' },
         )
 
@@ -111,6 +114,7 @@ export default async function DocumentosPage({
         amountMax,
         documentNumber,
         docTypes,
+        venueId: venueId || null,
     })
 
     const from = (page - 1) * PAGE_SIZE
@@ -153,6 +157,8 @@ export default async function DocumentosPage({
         reconciliation_delta: d.reconciliation_delta,
         provider_id: d.provider_id,
         provider_name: d.erp_providers?.name ?? null,
+        venue_id: d.venue_id ?? null,
+        venue_name: d.erp_venues?.name ?? null,
         referenced_delivery_notes: d.referenced_delivery_notes,
         parent_invoice_id: d.parent_invoice_id,
         created_at: d.created_at,
@@ -163,7 +169,7 @@ export default async function DocumentosPage({
         <div className="space-y-6">
             <PageHeader />
             <UploadDropZone venues={venues} />
-            <DocumentosClient documents={documents} total={count ?? 0} page={page} pageSize={PAGE_SIZE} providers={providers} />
+            <DocumentosClient documents={documents} total={count ?? 0} page={page} pageSize={PAGE_SIZE} providers={providers} venues={venues} />
         </div>
     )
 }
