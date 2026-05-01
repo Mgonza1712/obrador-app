@@ -136,11 +136,11 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
 
     useEffect(() => {
         if (!jobId) return
-        const MAX_POLLS = 36 // 3 min at 5s intervals
+        const MAX_POLLS = 60 // 3 min at 3s intervals
         pollCountRef.current = 0
         setJobStatus('polling')
 
-        pollingRef.current = setInterval(async () => {
+        const poll = async () => {
             pollCountRef.current += 1
             try {
                 const res = await fetch(`/api/job-status/${jobId}`, { cache: 'no-store' })
@@ -148,15 +148,11 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                 if (data.status === 'success') {
                     clearInterval(pollingRef.current!)
                     setJobStatus('success')
-                    setSuccessMsg(
-                        data.auto_approval
-                            ? 'Documento aprobado automáticamente.'
-                            : 'Documento enviado. Pendiente de revisión.'
-                    )
+                    setSuccessMsg('Documento procesado correctamente.')
                 } else if (data.status === 'duplicate') {
                     clearInterval(pollingRef.current!)
                     setJobStatus('duplicate')
-                    setSuccessMsg(data.message || 'Documento ya procesado anteriormente.')
+                    setSuccessMsg('Este documento ya había sido procesado anteriormente.')
                 } else if (data.status === 'failed') {
                     clearInterval(pollingRef.current!)
                     setJobStatus('failed')
@@ -164,16 +160,20 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                 } else if (pollCountRef.current >= MAX_POLLS) {
                     clearInterval(pollingRef.current!)
                     setJobStatus('timeout')
-                    setSuccessMsg('Puede tardar unos minutos en aparecer en la lista.')
+                    setSuccessMsg('El documento fue enviado y se procesará en breve.')
                 }
             } catch {
                 if (pollCountRef.current >= MAX_POLLS) {
                     clearInterval(pollingRef.current!)
                     setJobStatus('timeout')
-                    setSuccessMsg('Puede tardar unos minutos en aparecer en la lista.')
+                    setSuccessMsg('El documento fue enviado y se procesará en breve.')
                 }
             }
-        }, 5000)
+        }
+
+        // Poll immediately (job may already be done by the time browser gets job_id)
+        poll()
+        pollingRef.current = setInterval(poll, 3000)
 
         return () => {
             if (pollingRef.current) clearInterval(pollingRef.current)
@@ -1053,9 +1053,7 @@ function SuccessView({ message, jobStatus, onReset }: {
 }) {
     const isPolling = jobStatus === 'polling'
 
-    const icon = isPolling
-        ? <Loader2 className="mx-auto mb-4 h-14 w-14 animate-spin text-muted-foreground" />
-        : jobStatus === 'duplicate'
+    const icon = jobStatus === 'duplicate'
         ? <AlertTriangle className="mx-auto mb-4 h-14 w-14 text-amber-500" />
         : jobStatus === 'failed'
         ? <AlertCircle className="mx-auto mb-4 h-14 w-14 text-destructive" />
@@ -1071,12 +1069,12 @@ function SuccessView({ message, jobStatus, onReset }: {
         <div className="py-12 text-center">
             {icon}
             <h2 className="text-xl font-semibold">{title}</h2>
-            <p className="mt-2 text-sm text-muted-foreground">{message}</p>
-            <Button className="mt-8 w-full" variant="outline" onClick={onReset} disabled={isPolling}>
-                {isPolling
-                    ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Procesando...</>
-                    : 'Volver a pedidos'
-                }
+            <p className="mt-2 flex items-center justify-center gap-1.5 text-sm text-muted-foreground">
+                {isPolling && <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />}
+                {message}
+            </p>
+            <Button className="mt-8 w-full" variant="outline" onClick={onReset}>
+                Volver a pedidos
             </Button>
         </div>
     )
