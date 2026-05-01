@@ -133,20 +133,46 @@ Semántica:
 
 ## Caso especial: Factura Resumen (conciliación)
 
+**Referencia canónica:** `docs/decisions/2026-05-01-factura-resumen-architecture.md`
+
 La función SQL v4 soporta “Factura Resumen” cuando no hay items pero sí `albaranes_vinculados`.
 
 Conceptos:
 
 - Un **albarán** es un `erp_documents` con `doc_type='Albaran'`.
-- Una **factura resumen** es un `erp_documents` que referencia múltiples albaranes por `document_number`.
+- Una **factura resumen** es un `erp_documents` que referencia múltiples albaranes por número de documento.
 
 Campos:
 
-- `erp_documents.parent_invoice_id` (en el albarán)
-- `erp_documents.referenced_delivery_notes` (en la factura resumen)
+- `erp_documents.parent_invoice_id` (en el albarán — se rellena al conciliar)
+- `erp_documents.referenced_delivery_notes TEXT[]` (en la factura resumen)
 - `reconciliation_status` + `reconciliation_delta`
 
-Regla:
+### Invariante clave
 
-- si se encuentran todos los albaranes referenciados y el delta ≈ 0 → auto-conciliado y aprobado
-- si no → queda pendiente para conciliación manual
+**`status` de una Factura Resumen es siempre `approved` de forma inmediata.** El documento es un hecho financiero independientemente de si concilia. La conciliación se gestiona por separado vía `reconciliation_status`.
+
+Nunca aparece en el módulo de revisión (`/admin/revision`).
+
+### Estados de conciliación
+
+| reconciliation_status | Significado |
+|---|---|
+| `matched` | Todos los albaranes encontrados + delta ≤ umbral |
+| `pending_albaranes` | Algún albarán referenciado no encontrado en sistema |
+| `mismatch` | Todos encontrados pero delta > umbral (ej. factura incorrecta) |
+
+Umbral: `GREATEST(0.50€, 1% del total)`.
+
+### Búsqueda fuzzy de albaranes
+
+La coincidencia no es exacta sino por sufijo/prefijo (`ILIKE`), para manejar variantes donde el LLM extrae “9623” pero el número en BD es “A9623”.
+
+### Re-conciliación automática
+
+Al aprobar un albarán, `approveDocument` llama `trigger_conciliacion_for_albaran(albaran_id)`, que busca Facturas Resumen con `pending_albaranes`/`mismatch` que lo referencien y re-evalúa vía `intentar_conciliacion(document_id)`. Event-driven, sin cron.
+
+### Funciones SQL
+
+- `intentar_conciliacion(document_id)` — re-evalúa una Factura Resumen
+- `trigger_conciliacion_for_albaran(albaran_id)` — disparador desde aprobación de albarán

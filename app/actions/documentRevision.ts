@@ -433,6 +433,12 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
 
         if (approveError) throw new Error(`Failed to approve document: ${approveError.message}`)
 
+        // ── 6. If this is an Albaran, check if any pending Factura Resumen can now be reconciled ──
+        if (payload.document.doc_type?.toLowerCase() === 'albaran') {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await (supabase as any).rpc('trigger_conciliacion_for_albaran', { p_albaran_id: payload.document.id })
+        }
+
         revalidatePath('/admin/revision')
         return { success: true }
 

@@ -570,6 +570,23 @@ Mejorar el extractor con hints del pedido, extraccion de descuentos, y mejor man
 
 ---
 
+## Ideas post-lanzamiento (backlog sin fase asignada)
+
+### Vista de Conciliaciones
+**Motivacion:** hoy las Facturas Resumen con `reconciliation_status != 'matched'` son visibles via filtro en /documentos, pero no hay una vista dedicada que muestre el estado de cada reclamacion pendiente.
+
+**Propuesta:**
+- Sub-vista dentro de /documentos (tab o toggle "Conciliaciones") que muestra tabla: proveedor | numero factura | albaranes referenciados | albaranes encontrados | delta | estado reclamacion
+- Columna de estado gestionable por el usuario: "No reclamado" / "Reclamado - en espera" / "Resuelto"
+- Al seleccionar una fila se puede vincular manualmente el albaran faltante una vez que llega
+- Match rapido: la factura ya tiene el numero de albaran referenciado, se presenta como candidato automatico
+
+**Valor:** evita que el usuario olvide que tiene reclamaciones pendientes con proveedores. Especialmente util cuando se acumulan varios meses de facturas mensuales con albaranes faltantes.
+
+**Prerequisito:** implementar el fix de Facturas Resumen (SQL v4 + auto-aprobacion siempre, reconciliation_status granular) que es parte de MC-5.
+
+---
+
 ## Estimacion de sesiones
 
 | Fase | Sesiones estimadas | Prerequisito |
