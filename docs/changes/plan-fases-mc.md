@@ -597,6 +597,7 @@ Tareas obligatorias antes de abrir el sistema a usuarios reales. No están en ni
 
 | # | Tarea | Estado | Notas |
 |---|-------|--------|-------|
+| P-0 | **Scanner Fix**: compresión client-side + envío directo a n8n desde browser + multiscan (PDF multi-página) + fix spinner infinito | ✅ Completa | Ver `docs/decisions/2026-05-01-scanner-architecture-fix.md`. Elimina 504s en Vercel Hobby. |
 | P-1 | **MC-0-Admin**: `is_super_admin` flag + tenant WeScaleOps separado (Maxi no debe ser usuario del tenant del cliente) | ⏳ Pendiente | Ver `memory/project_super_admin.md` |
 | P-2 | **Alta de usuarios**: botón "Invitar" en `/admin/usuarios` via `supabase.auth.admin.inviteUserByEmail()` | ⏳ Pendiente | Prerequisito de P-1 |
 | P-3 | **`CRON_SECRET`**: generar secret + añadir a Vercel env + `UPDATE erp_app_settings` en Supabase | ⏳ Pendiente | Sin esto, los pedidos programados no se envían |

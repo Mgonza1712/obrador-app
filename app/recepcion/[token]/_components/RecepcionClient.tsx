@@ -19,6 +19,7 @@ import {
     ScanLine,
     X,
     AlertTriangle,
+    Plus,
 } from 'lucide-react'
 import type { VenueInfo, PendingOrder, PendingOrderLine } from '@/app/actions/recepcion'
 import { anonRegisterDelivery } from '@/app/actions/recepcion'
@@ -33,6 +34,8 @@ type ScanContext = 'order' | 'no-order' | null
 
 type DocType = 'albaran' | 'factura' | 'ticket' | 'otro'
 
+type ScannedPage = { dataUrl: string }
+
 const DOC_TYPES: { value: DocType; label: string }[] = [
     { value: 'albaran', label: 'Albarán' },
     { value: 'factura', label: 'Factura' },
@@ -40,13 +43,59 @@ const DOC_TYPES: { value: DocType; label: string }[] = [
     { value: 'otro', label: 'No sé' },
 ]
 
-function dataUrlToFile(dataUrl: string, filename: string): File {
-    const arr = dataUrl.split(',')
-    const mime = arr[0].match(/:(.*?);/)?.[1] ?? 'image/jpeg'
-    const bstr = atob(arr[1])
-    const u8arr = new Uint8Array(bstr.length)
-    for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i)
-    return new File([u8arr], filename, { type: mime })
+const N8N_SCANNER_URL = 'https://n8n.wescaleops.com/webhook/scanner-intake'
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+async function compressImage(dataUrl: string): Promise<string> {
+    const imageCompression = (await import('browser-image-compression')).default
+    const res = await fetch(dataUrl)
+    const blob = await res.blob()
+    const file = new File([blob], 'image.jpg', { type: 'image/jpeg' })
+    const compressed = await imageCompression(file, {
+        maxSizeMB: 1,
+        maxWidthOrHeight: 1920,
+        useWebWorker: true,
+    })
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = (e) => {
+            const result = e.target?.result as string
+            resolve(result.includes(',') ? result.split(',')[1] : result)
+        }
+        reader.onerror = reject
+        reader.readAsDataURL(compressed)
+    })
+}
+
+async function buildPdf(pages: ScannedPage[]): Promise<string> {
+    const { jsPDF } = await import('jspdf')
+    const getImgSize = (dataUrl: string): Promise<{ w: number; h: number }> =>
+        new Promise((res) => {
+            const img = new Image()
+            img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight })
+            img.src = dataUrl
+        })
+
+    const firstSize = await getImgSize(pages[0].dataUrl)
+    const pdf = new jsPDF({
+        orientation: firstSize.w > firstSize.h ? 'landscape' : 'portrait',
+        unit: 'px',
+        format: [firstSize.w, firstSize.h],
+        compress: true,
+    })
+
+    for (let i = 0; i < pages.length; i++) {
+        if (i > 0) {
+            const size = await getImgSize(pages[i].dataUrl)
+            pdf.addPage([size.w, size.h], size.w > size.h ? 'landscape' : 'portrait')
+        }
+        const size = await getImgSize(pages[i].dataUrl)
+        pdf.addImage(pages[i].dataUrl, 'JPEG', 0, 0, size.w, size.h)
+    }
+
+    const output = pdf.output('datauristring')
+    return output.includes(',') ? output.split(',')[1] : output
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -63,8 +112,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     const [step, setStep]                   = useState<Step>('orders')
     const [selectedOrder, setSelectedOrder] = useState<PendingOrder | null>(null)
     const [docType, setDocType]             = useState<DocType>('albaran')
-    const [photo, setPhoto]                 = useState<File | null>(null)
-    const [photoPreview, setPhotoPreview]   = useState<string | null>(null)
+    const [pages, setPages]                 = useState<ScannedPage[]>([])
     const [observations, setObservations]   = useState('')
     const [manualQtys, setManualQtys]       = useState<Record<string, number>>({})
     const [successMsg, setSuccessMsg]       = useState('')
@@ -74,19 +122,17 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     const [lightboxSrc, setLightboxSrc]     = useState<string | null>(null)
     const [jobId, setJobId]                 = useState<string | null>(null)
     const [jobStatus, setJobStatus]         = useState<'polling' | 'success' | 'duplicate' | 'failed' | 'timeout' | null>(null)
-    const pollingRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+    const pollingRef   = useRef<ReturnType<typeof setInterval> | null>(null)
     const pollCountRef = useRef(0)
 
-    // ── Scanner state ─────────────────────────────────────────────────────────
     const [scanContext, setScanContext] = useState<ScanContext>(null)
-
     const fileInputRef = useRef<HTMLInputElement>(null)
 
     // ── Job polling ───────────────────────────────────────────────────────────
 
     useEffect(() => {
         if (!jobId) return
-        const MAX_POLLS = 36 // 3 min a 5s
+        const MAX_POLLS = 36 // 3 min at 5s intervals
         pollCountRef.current = 0
         setJobStatus('polling')
 
@@ -135,8 +181,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     function handleSelectOrder(order: PendingOrder) {
         setSelectedOrder(order)
         setDocType('albaran')
-        setPhoto(null)
-        setPhotoPreview(null)
+        setPages([])
         setObservations('')
         setStep('reception')
     }
@@ -148,21 +193,26 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.target.files?.[0]
         if (!file) return
-        setPhoto(file)
-        setPhotoPreview(URL.createObjectURL(file))
+        const reader = new FileReader()
+        reader.onload = (ev) => {
+            const dataUrl = ev.target?.result as string
+            setPages([{ dataUrl }])
+        }
+        reader.readAsDataURL(file)
+        e.target.value = ''
     }
 
-    // Called when DocumentScanner delivers the processed (perspective-corrected) image
     function handleScannerCapture(processedDataUrl: string) {
         const ctx = scanContext
-        const file = dataUrlToFile(processedDataUrl, `scan_${Date.now()}.jpg`)
-        setPhoto(file)
-        setPhotoPreview(processedDataUrl)
+        setPages(prev => [...prev, { dataUrl: processedDataUrl }])
         setScanContext(null)
         if (ctx === 'no-order') {
             setStep('no-order-confirm')
         }
-        // For 'order' context the user is already in the 'reception' step
+    }
+
+    function handleRemovePage(index: number) {
+        setPages(prev => prev.filter((_, i) => i !== index))
     }
 
     function handleGoManual() {
@@ -175,21 +225,21 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         setStep('manual-qty')
     }
 
-    // Photo submission (works for both order and no-order flows)
     async function handleSubmitRecepcion() {
         setIsSubmitting(true)
         setErrorMsg('')
 
-        const formData = new FormData()
-        formData.append('order_id', selectedOrder?.id ?? '')
-        formData.append('observations', observations)
-        formData.append('doc_type', docType)
-        if (photo) formData.append('photo', photo)
-
         try {
+            // Step 1: Validate on server (fast <2s — auth + order check only, no photo)
             const res = await fetch(`/api/recepcion/${token}/submit`, {
                 method: 'POST',
-                body: formData,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    order_id: selectedOrder?.id ?? null,
+                    observations,
+                    doc_type: docType,
+                    has_photo: pages.length > 0,
+                }),
             })
             const data = await res.json()
 
@@ -199,13 +249,54 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                 return
             }
 
-            if (data.jobId) setJobId(data.jobId)
-            setSuccessMsg(
-                photo
-                    ? 'Foto enviada. El documento se está procesando...'
-                    : 'Observaciones registradas.'
-            )
+            if (pages.length === 0) {
+                setSuccessMsg('Observaciones registradas.')
+                setStep('success')
+                return
+            }
+
+            // Step 2: Prepare document client-side (compress or build PDF)
+            let document_base64: string
+            let filename: string
+            let is_image: boolean
+
+            if (pages.length === 1) {
+                document_base64 = await compressImage(pages[0].dataUrl)
+                filename = `recepcion_${Date.now()}.jpg`
+                is_image = true
+            } else {
+                document_base64 = await buildPdf(pages)
+                filename = `recepcion_${Date.now()}.pdf`
+                is_image = false
+            }
+
+            // Step 3: POST directly from browser to n8n — no Vercel timeout constraint
+            const n8nRes = await fetch(N8N_SCANNER_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    document_base64,
+                    local: venue.name,
+                    filename,
+                    is_image,
+                    order_id: selectedOrder?.id ?? null,
+                    venue_id: venue.id,
+                    observations: observations || null,
+                    doc_type: docType,
+                }),
+            })
+
+            if (!n8nRes.ok) {
+                setErrorMsg('Error al enviar el documento a procesar. Inténtalo de nuevo.')
+                setStep('error')
+                return
+            }
+
+            const n8nData = await n8nRes.json()
+            if (n8nData.job_id) setJobId(n8nData.job_id)
+            setSuccessMsg('Foto enviada. El documento se está procesando...')
             setStep('success')
+
         } catch {
             setErrorMsg('No se pudo conectar. Verifica tu conexión e inténtalo de nuevo.')
             setStep('error')
@@ -214,7 +305,6 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         }
     }
 
-    // Manual qty submission (Server Action)
     function handleSubmitManual() {
         if (!selectedOrder) return
         const received = Object.entries(manualQtys).map(([line_id, qty_received]) => ({
@@ -244,8 +334,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         setJobStatus(null)
         setStep('orders')
         setSelectedOrder(null)
-        setPhoto(null)
-        setPhotoPreview(null)
+        setPages([])
         setObservations('')
         setManualQtys({})
         setErrorMsg('')
@@ -279,7 +368,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         )
     }
 
-    // ── Scanner overlay (full-screen, takes over the whole render) ────────────
+    // ── Scanner overlay ────────────────────────────────────────────────────────
 
     if (scanContext !== null) {
         return (
@@ -294,7 +383,6 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
 
     return (
         <div className="mx-auto max-w-md px-4 py-6 pb-12">
-            {/* Header */}
             <div className="mb-6">
                 <div className="flex items-center gap-2">
                     <Package className="h-5 w-5 text-primary" />
@@ -303,7 +391,6 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                 <p className="mt-0.5 text-sm text-muted-foreground">Recepción de mercancía</p>
             </div>
 
-            {/* Hidden file input for gallery uploads */}
             <input
                 ref={fileInputRef}
                 type="file"
@@ -312,7 +399,6 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                 onChange={handleFileChange}
             />
 
-            {/* Views */}
             {step === 'orders' && (
                 <OrdersView
                     orders={initialOrders}
@@ -326,10 +412,11 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                     order={selectedOrder}
                     docType={docType}
                     setDocType={setDocType}
-                    photoPreview={photoPreview}
+                    pages={pages}
                     fileInputRef={fileInputRef}
                     onOpenScanner={() => handleOpenScanner('order')}
                     onOpenLightbox={setLightboxSrc}
+                    onRemovePage={handleRemovePage}
                     observations={observations}
                     setObservations={setObservations}
                     isSubmitting={isSubmitting}
@@ -343,17 +430,17 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                 <NoOrderConfirmView
                     docType={docType}
                     setDocType={setDocType}
-                    photoPreview={photoPreview}
+                    pages={pages}
                     onOpenLightbox={setLightboxSrc}
+                    onRemovePage={handleRemovePage}
                     observations={observations}
                     setObservations={setObservations}
                     isSubmitting={isSubmitting}
                     onBack={() => {
                         setStep('orders')
-                        setPhoto(null)
-                        setPhotoPreview(null)
+                        setPages([])
                     }}
-                    onRetakePhoto={() => handleOpenScanner('no-order')}
+                    onAddPage={() => handleOpenScanner('no-order')}
                     onSubmit={handleSubmitRecepcion}
                 />
             )}
@@ -487,35 +574,51 @@ function DeliveryBadge({ status, scanSubmittedAt }: { status: string; scanSubmit
     )
 }
 
-// ─── Shared: photo capture section ────────────────────────────────────────────
+// ─── Shared: photo capture section with multiscan ─────────────────────────────
 
 function PhotoCaptureSection({
-    photoPreview,
+    pages,
     fileInputRef,
     onOpenScanner,
     onOpenLightbox,
+    onRemovePage,
 }: {
-    photoPreview: string | null
+    pages: ScannedPage[]
     fileInputRef: React.RefObject<HTMLInputElement | null>
     onOpenScanner: () => void
     onOpenLightbox: (src: string) => void
+    onRemovePage: (index: number) => void
 }) {
-    if (photoPreview) {
+    if (pages.length > 0) {
         return (
-            <div className="space-y-2">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                    src={photoPreview}
-                    alt="Vista previa — toca para ver completa"
-                    className="w-full cursor-pointer rounded-lg border object-contain bg-muted/30"
-                    style={{ maxHeight: 240 }}
-                    onClick={() => onOpenLightbox(photoPreview)}
-                />
-                <p className="text-center text-xs text-muted-foreground">Toca la imagen para verla completa</p>
+            <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-2">
+                    {pages.map((page, i) => (
+                        <div key={i} className="relative">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                                src={page.dataUrl}
+                                alt={`Página ${i + 1}`}
+                                className="w-full aspect-[3/4] object-cover rounded-md border cursor-pointer bg-muted/30"
+                                onClick={() => onOpenLightbox(page.dataUrl)}
+                            />
+                            <button
+                                className="absolute -top-1.5 -right-1.5 rounded-full bg-destructive p-0.5 text-destructive-foreground shadow"
+                                onClick={() => onRemovePage(i)}
+                            >
+                                <X className="h-3 w-3" />
+                            </button>
+                            <span className="absolute bottom-1 left-1 rounded bg-black/50 px-1 text-[10px] text-white">
+                                {i + 1}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+                <p className="text-center text-xs text-muted-foreground">Toca una imagen para verla completa</p>
                 <div className="grid grid-cols-2 gap-2">
                     <Button variant="outline" size="sm" className="w-full" onClick={onOpenScanner}>
-                        <Camera className="mr-2 h-4 w-4" />
-                        Repetir foto
+                        <Plus className="mr-1 h-4 w-4" />
+                        Añadir página
                     </Button>
                     <Button
                         variant="outline"
@@ -523,8 +626,8 @@ function PhotoCaptureSection({
                         className="w-full"
                         onClick={() => fileInputRef.current?.click()}
                     >
-                        <Upload className="mr-2 h-4 w-4" />
-                        Cambiar
+                        <Upload className="mr-1 h-4 w-4" />
+                        Desde galería
                     </Button>
                 </div>
             </div>
@@ -559,10 +662,11 @@ function ReceptionView({
     order,
     docType,
     setDocType,
-    photoPreview,
+    pages,
     fileInputRef,
     onOpenScanner,
     onOpenLightbox,
+    onRemovePage,
     observations,
     setObservations,
     isSubmitting,
@@ -573,10 +677,11 @@ function ReceptionView({
     order: PendingOrder
     docType: DocType
     setDocType: (d: DocType) => void
-    photoPreview: string | null
+    pages: ScannedPage[]
     fileInputRef: React.RefObject<HTMLInputElement | null>
     onOpenScanner: () => void
     onOpenLightbox: (src: string) => void
+    onRemovePage: (index: number) => void
     observations: string
     setObservations: (v: string) => void
     isSubmitting: boolean
@@ -601,7 +706,6 @@ function ReceptionView({
                 </h2>
             </div>
 
-            {/* Lines summary */}
             <div className="rounded-lg border bg-muted/30 p-3">
                 <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Productos pedidos
@@ -616,7 +720,6 @@ function ReceptionView({
                 </div>
             </div>
 
-            {/* Document type */}
             <div>
                 <Label className="mb-2 block text-sm">Tipo de documento</Label>
                 <div className="grid grid-cols-4 gap-1">
@@ -636,18 +739,24 @@ function ReceptionView({
                 </div>
             </div>
 
-            {/* Photo */}
             <div>
-                <Label className="mb-2 block text-sm">Foto del documento</Label>
+                <Label className="mb-2 block text-sm">
+                    Foto del documento
+                    {pages.length > 1 && (
+                        <span className="ml-2 text-xs text-muted-foreground">
+                            ({pages.length} páginas — se envía como PDF)
+                        </span>
+                    )}
+                </Label>
                 <PhotoCaptureSection
-                    photoPreview={photoPreview}
+                    pages={pages}
                     fileInputRef={fileInputRef}
                     onOpenScanner={onOpenScanner}
                     onOpenLightbox={onOpenLightbox}
+                    onRemovePage={onRemovePage}
                 />
             </div>
 
-            {/* Observations */}
             <div>
                 <Label htmlFor="obs" className="mb-2 block text-sm">
                     Observaciones <span className="text-muted-foreground">(opcional)</span>
@@ -687,24 +796,26 @@ function ReceptionView({
 function NoOrderConfirmView({
     docType,
     setDocType,
-    photoPreview,
+    pages,
     onOpenLightbox,
+    onRemovePage,
     observations,
     setObservations,
     isSubmitting,
     onBack,
-    onRetakePhoto,
+    onAddPage,
     onSubmit,
 }: {
     docType: DocType
     setDocType: (d: DocType) => void
-    photoPreview: string | null
+    pages: ScannedPage[]
     onOpenLightbox: (src: string) => void
+    onRemovePage: (index: number) => void
     observations: string
     setObservations: (v: string) => void
     isSubmitting: boolean
     onBack: () => void
-    onRetakePhoto: () => void
+    onAddPage: () => void
     onSubmit: () => void
 }) {
     return (
@@ -723,26 +834,41 @@ function NoOrderConfirmView({
                 </p>
             </div>
 
-            {/* Photo preview */}
-            {photoPreview && (
+            {pages.length > 0 && (
                 <div className="space-y-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                        src={photoPreview}
-                        alt="Documento escaneado — toca para ver completo"
-                        className="w-full cursor-pointer rounded-lg border object-contain bg-muted/30"
-                        style={{ maxHeight: 260 }}
-                        onClick={() => onOpenLightbox(photoPreview)}
-                    />
-                    <p className="text-center text-xs text-muted-foreground">Toca la imagen para verla completa</p>
-                    <Button variant="outline" size="sm" className="w-full" onClick={onRetakePhoto}>
-                        <Camera className="mr-2 h-4 w-4" />
-                        Repetir foto
+                    <div className="grid grid-cols-3 gap-2">
+                        {pages.map((page, i) => (
+                            <div key={i} className="relative">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                    src={page.dataUrl}
+                                    alt={`Página ${i + 1}`}
+                                    className="w-full aspect-[3/4] object-cover rounded-md border cursor-pointer bg-muted/30"
+                                    onClick={() => onOpenLightbox(page.dataUrl)}
+                                />
+                                <button
+                                    className="absolute -top-1.5 -right-1.5 rounded-full bg-destructive p-0.5 text-destructive-foreground shadow"
+                                    onClick={() => onRemovePage(i)}
+                                >
+                                    <X className="h-3 w-3" />
+                                </button>
+                                <span className="absolute bottom-1 left-1 rounded bg-black/50 px-1 text-[10px] text-white">
+                                    {i + 1}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                    <p className="text-center text-xs text-muted-foreground">
+                        Toca una imagen para verla completa
+                        {pages.length > 1 && ' · Se enviarán como PDF'}
+                    </p>
+                    <Button variant="outline" size="sm" className="w-full" onClick={onAddPage}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Añadir página
                     </Button>
                 </div>
             )}
 
-            {/* Document type */}
             <div>
                 <Label className="mb-2 block text-sm">Tipo de documento</Label>
                 <div className="grid grid-cols-4 gap-1">
@@ -762,7 +888,6 @@ function NoOrderConfirmView({
                 </div>
             </div>
 
-            {/* Observations */}
             <div>
                 <Label htmlFor="obs-noorder" className="mb-2 block text-sm">
                     Observaciones <span className="text-muted-foreground">(opcional)</span>
@@ -776,7 +901,7 @@ function NoOrderConfirmView({
                 />
             </div>
 
-            <Button className="w-full" size="lg" onClick={onSubmit} disabled={isSubmitting || !photoPreview}>
+            <Button className="w-full" size="lg" onClick={onSubmit} disabled={isSubmitting || pages.length === 0}>
                 {isSubmitting ? (
                     <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -922,7 +1047,7 @@ function SuccessView({ message, jobStatus, onReset }: {
     jobStatus: 'polling' | 'success' | 'duplicate' | 'failed' | 'timeout' | null
     onReset: () => void
 }) {
-    const isPolling = jobStatus === 'polling' || jobStatus === null
+    const isPolling = jobStatus === 'polling'
 
     const icon = isPolling
         ? <Loader2 className="mx-auto mb-4 h-14 w-14 animate-spin text-muted-foreground" />
@@ -943,7 +1068,7 @@ function SuccessView({ message, jobStatus, onReset }: {
             {icon}
             <h2 className="text-xl font-semibold">{title}</h2>
             <p className="mt-2 text-sm text-muted-foreground">{message}</p>
-            <Button className="mt-8 w-full" variant="outline" onClick={onReset}>
+            <Button className="mt-8 w-full" variant="outline" onClick={onReset} disabled={isPolling}>
                 {isPolling
                     ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Procesando...</>
                     : 'Volver a pedidos'
