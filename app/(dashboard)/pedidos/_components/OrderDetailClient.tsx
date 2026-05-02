@@ -2,7 +2,7 @@
 
 import { useState, useTransition, useEffect } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import {
     ArrowLeft, CheckCircle2, Clock, XCircle, MessageCircle, Globe, Mail, Phone,
     Trash2, Loader2, AlertCircle, CheckCircle, Package, AlertTriangle, RefreshCw,
@@ -22,6 +22,7 @@ import AddProductsPanel from './AddProductsPanel'
 import SchedulingPanel from './SchedulingPanel'
 import DiscrepanciasTab from './DiscrepanciasTab'
 import type { OrderDetail, OrderLineDetail, DeliveryStatus, LinkedDocument } from '@/app/actions/pedidos'
+import { getPendingQuantity, getQuantityToCancel, isLineDelivered, isLinePending } from '@/lib/orders/deliveryTolerance'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -48,7 +49,7 @@ interface Props {
 function calcDeliveryStatus(lines: OrderLineDetail[]): DeliveryStatus {
     const active = lines.filter((l) => !l.is_cancelled)
     if (active.length === 0) return 'delivered'
-    const allDelivered = active.every((l) => l.qty_received >= l.quantity)
+    const allDelivered = active.every(isLineDelivered)
     const anyDelivered = active.some((l) => l.qty_received > 0)
     return allDelivered ? 'delivered' : anyDelivered ? 'partially_delivered' : 'pending'
 }
@@ -219,9 +220,8 @@ function RegisterDeliveryPanel({
     onSuccess: (updates: { line_id: string; qty_received: number; notes: string | null }[], hadExtras: boolean) => void
     onClose: () => void
 }) {
-    const router = useRouter()
     const [received, setReceived] = useState<Record<string, string>>(
-        () => Object.fromEntries(lines.map((l) => [l.id, Math.max(0, l.quantity - l.qty_received).toString()]))
+        () => Object.fromEntries(lines.map((l) => [l.id, getPendingQuantity(l).toString()]))
     )
     const [lineNotes, setLineNotes] = useState<Record<string, string>>(
         () => Object.fromEntries(lines.map((l) => [l.id, l.notes ?? '']))
@@ -250,7 +250,7 @@ function RegisterDeliveryPanel({
     }
 
     function markAll() {
-        setReceived(Object.fromEntries(lines.map((l) => [l.id, Math.max(0, l.quantity - l.qty_received).toString()])))
+        setReceived(Object.fromEntries(lines.map((l) => [l.id, getPendingQuantity(l).toString()])))
     }
     function clearAll() { setReceived(Object.fromEntries(lines.map((l) => [l.id, '0']))) }
 
@@ -365,7 +365,7 @@ function RegisterDeliveryPanel({
                                 )}
                             </td>
                             <td className="py-2 pr-3 text-right tabular-nums text-xs text-muted-foreground w-20 shrink-0 pt-2.5">
-                                {formatQty(Math.max(0, l.quantity - l.qty_received), l.unit)}
+                                {formatQty(getPendingQuantity(l), l.unit)}
                             </td>
                             <td className="py-2 text-right w-24 shrink-0 pt-2">
                                 <input
@@ -514,8 +514,8 @@ function ProviderGroup({
                 </thead>
                 <tbody>
                     {lines.map((line) => {
-                        const lineDeliveryPending = !line.is_cancelled && line.qty_received < line.quantity
-                        const isFullyReceived = !line.is_cancelled && line.qty_received >= line.quantity
+                        const lineDeliveryPending = isLinePending(line)
+                        const isFullyReceived = !line.is_cancelled && isLineDelivered(line)
                         return (
                             <tr
                                 key={line.id}
@@ -543,6 +543,9 @@ function ProviderGroup({
                                             </span>
                                             {line.is_cancelled && (
                                                 <Badge variant="outline" className="text-xs border-slate-300 bg-slate-50 text-slate-500 shrink-0">Cancelado</Badge>
+                                            )}
+                                            {!line.is_cancelled && line.qty_cancelled > 0 && (
+                                                <Badge variant="outline" className="text-xs border-slate-300 bg-slate-50 text-slate-600 shrink-0">Restante cerrado</Badge>
                                             )}
                                             {!line.is_matched && !line.is_cancelled && (
                                                 <Badge variant="outline" className="text-xs border-amber-300 bg-amber-50 text-amber-700 shrink-0">Sin vincular</Badge>
@@ -650,6 +653,7 @@ function ProviderGroup({
 
 export default function OrderDetailClient({ order, masterItems, providers, activePrices, aliasFormats, venues, linkedDocuments }: Props) {
     const router = useRouter()
+    const searchParams = useSearchParams()
     const [isPending, startTransition] = useTransition()
     const [lines, setLines] = useState<OrderLineDetail[]>(order.lines)
     const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
@@ -664,7 +668,9 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
     const [showDeliverySection, setShowDeliverySection] = useState(true)
     const [providerNotes, setProviderNotes] = useState<Record<string, string>>(order.provider_notes ?? {})
     const [venueId, setVenueId] = useState<string | null>(order.venue_id)
-    const [activeTab, setActiveTab] = useState<'lineas' | 'discrepancias'>('lineas')
+    const [activeTab, setActiveTab] = useState<'lineas' | 'discrepancias'>(
+        searchParams.get('tab') === 'discrepancias' ? 'discrepancias' : 'lineas'
+    )
     const [confirmDialog, setConfirmDialog] = useState<{
         title: string
         description: string
@@ -700,7 +706,24 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
             const res = await cancelPendingLines(order.id, [lineId])
             if (res.success) {
                 setLines((prev) => {
-                    const next = prev.map((l) => l.id === lineId ? { ...l, is_cancelled: true } : l)
+                    const next = prev.map((l) => {
+                        if (l.id !== lineId) return l
+                        const qtyToCancel = getQuantityToCancel(l)
+                        return l.qty_received > 0
+                            ? {
+                                ...l,
+                                qty_cancelled: qtyToCancel,
+                                cancelled_reason: 'Proveedor no entregara el pendiente',
+                                cancelled_at: new Date().toISOString(),
+                            }
+                            : {
+                                ...l,
+                                is_cancelled: true,
+                                qty_cancelled: qtyToCancel,
+                                cancelled_reason: 'Linea no entregada',
+                                cancelled_at: new Date().toISOString(),
+                            }
+                    })
                     setDeliveryStatus(calcDeliveryStatus(next))
                     return next
                 })
@@ -846,7 +869,7 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
 
     function handleCancelPendingLines() {
         const pendingIds = lines
-            .filter((l) => !l.is_cancelled && l.qty_received < l.quantity)
+            .filter(isLinePending)
             .map((l) => l.id)
         if (pendingIds.length === 0) return
 
@@ -857,9 +880,24 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                 const res = await cancelPendingLines(order.id, pendingIds)
                 if (res.success) {
                     setLines((prev) => {
-                        const next = prev.map((l) =>
-                            pendingIds.includes(l.id) ? { ...l, is_cancelled: true } : l
-                        )
+                        const next = prev.map((l) => {
+                            if (!pendingIds.includes(l.id)) return l
+                            const qtyToCancel = getQuantityToCancel(l)
+                            return l.qty_received > 0
+                                ? {
+                                    ...l,
+                                    qty_cancelled: qtyToCancel,
+                                    cancelled_reason: 'Proveedor no entregara el pendiente',
+                                    cancelled_at: new Date().toISOString(),
+                                }
+                                : {
+                                    ...l,
+                                    is_cancelled: true,
+                                    qty_cancelled: qtyToCancel,
+                                    cancelled_reason: 'Linea no entregada',
+                                    cancelled_at: new Date().toISOString(),
+                                }
+                        })
                         setDeliveryStatus(calcDeliveryStatus(next))
                         return next
                     })
@@ -897,7 +935,7 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
     }, 0)
 
     const unmatchedCount = lines.filter((l) => !l.is_matched && !l.is_cancelled).length
-    const pendingCount = lines.filter((l) => !l.is_cancelled && l.qty_received < l.quantity).length
+    const pendingCount = lines.filter(isLinePending).length
     const activeLinesForDelivery = lines.filter((l) => !l.is_cancelled)
     const orderId = order.id.slice(0, 8).toUpperCase()
 
@@ -1145,7 +1183,7 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
             {/* Register delivery panel */}
             {showDeliveryPanel && activeLinesForDelivery.length > 0 && (
                 <RegisterDeliveryPanel
-                    lines={activeLinesForDelivery.filter((l) => l.qty_received < l.quantity)}
+                    lines={activeLinesForDelivery.filter(isLinePending)}
                     orderId={order.id}
                     masterItems={masterItems}
                     activePrices={activePrices}

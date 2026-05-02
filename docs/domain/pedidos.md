@@ -33,6 +33,7 @@ erp_purchase_orders
 erp_purchase_order_lines
   order_id, provider_id, master_item_id
   raw_text, quantity, unit
+  qty_received, qty_cancelled, is_cancelled
   is_matched, estimated_unit_price
 
 erp_venues
@@ -219,6 +220,8 @@ Disponible una vez que el pedido está en estado `sent`.
   - Todas completas → `delivered`
   - Parciales → `partially_delivered`
   - Ninguna → `pending`
+- Para líneas de categorías frescas (`Frutas y Verduras`, `Carnes`, `Pescados y Mariscos`) vendidas por peso o volumen (`kg`, `g`, `l`, `ml`), una diferencia restante menor o igual al `20%` se considera entregada y no sigue apareciendo como pendiente.
+- Si el proveedor no va a entregar el resto de una línea parcialmente recibida, el usuario puede cerrar solo el pendiente. Ese remanente se guarda en `qty_cancelled`; no se pierde la parte ya recibida.
 
 También accessible desde el QR permanente por local (`/recepcion/{venue_token}`) que muestra todos los pedidos pendientes de entrega del local.
 
@@ -247,7 +250,7 @@ También accessible desde el QR permanente por local (`/recepcion/{venue_token}`
 | Marcar como enviado | Borrador | Marca `sent` sin enviar mensajes |
 | Cancelar pedido | Borrador | Marca `cancelled` |
 | Registrar recepción | Enviado | Actualiza `qty_received` por línea |
-| Cancelar líneas pendientes | Enviado, parcial | Marca líneas como `is_cancelled` |
+| Cancelar líneas pendientes | Enviado, parcial | Si no hubo entrega, marca la línea como `is_cancelled`; si hubo entrega parcial, cierra solo el resto pendiente en `qty_cancelled` |
 | Tab Discrepancias | Enviado | Ver documentos vinculados + reporte discrepancias |
 | Vincular documento | Enviado (tab Discrepancias) | `linkDocumentToOrder` — manual por ID |
 | Desvincular documento | Enviado (tab Discrepancias) | `unlinkDocumentFromOrder` |

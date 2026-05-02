@@ -3,6 +3,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createServiceClient } from '@/lib/supabase/service'
 import { revalidatePath } from 'next/cache'
+import { isLineDelivered, isLinePending } from '@/lib/orders/deliveryTolerance'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -18,6 +19,9 @@ export interface PendingOrderLine {
     quantity: number
     unit: string | null
     qty_received: number
+    qty_cancelled: number
+    category: string | null
+    base_unit: string | null
     provider_name: string | null
 }
 
@@ -69,7 +73,7 @@ export async function getPendingOrdersForVenue(venueId: string): Promise<Pending
 
     const { data: lines } = await sb
         .from('erp_purchase_order_lines')
-        .select('id, order_id, raw_text, quantity, unit, qty_received, erp_providers(name)')
+        .select('id, order_id, raw_text, quantity, unit, qty_received, qty_cancelled, erp_providers(name), erp_master_items(category, base_unit)')
         .in('order_id', orderIds)
         .or('is_cancelled.is.null,is_cancelled.eq.false')
 
@@ -86,16 +90,22 @@ export async function getPendingOrdersForVenue(venueId: string): Promise<Pending
             delivery_status: o.delivery_status ?? 'pending',
             scan_submitted_at: o.scan_submitted_at ?? null,
             providers: [...providerSet],
-            lines: orderLines.map((l: any) => ({
-                id: l.id,
-                raw_text: l.raw_text,
-                quantity: l.quantity,
-                unit: l.unit ?? null,
-                qty_received: l.qty_received ?? 0,
-                provider_name: l.erp_providers?.name ?? null,
-            })),
+            lines: orderLines
+                .map((l: any) => ({
+                    id: l.id,
+                    raw_text: l.raw_text,
+                    quantity: Number(l.quantity),
+                    unit: l.unit ?? null,
+                    qty_received: Number(l.qty_received ?? 0),
+                    qty_cancelled: Number(l.qty_cancelled ?? 0),
+                    category: l.erp_master_items?.category ?? null,
+                    base_unit: l.erp_master_items?.base_unit ?? null,
+                    provider_name: l.erp_providers?.name ?? null,
+                }))
+                .filter((l: PendingOrderLine) => isLinePending(l)),
         }
     })
+        .filter((o: PendingOrder) => o.lines.length > 0)
 }
 
 // ─── Manual delivery (no photo) ───────────────────────────────────────────────
@@ -141,13 +151,20 @@ export async function anonRegisterDelivery(
     // Recalculate delivery_status
     const { data: allLines } = await sb
         .from('erp_purchase_order_lines')
-        .select('quantity, qty_received, is_cancelled')
+        .select('quantity, qty_received, qty_cancelled, unit, is_cancelled, erp_master_items(category, base_unit)')
         .eq('order_id', orderId)
 
     const active = ((allLines ?? []) as any[]).filter((l: any) => !l.is_cancelled)
     const allDelivered =
-        active.length === 0 || active.every((l: any) => (l.qty_received ?? 0) >= l.quantity)
-    const anyDelivered = active.some((l: any) => (l.qty_received ?? 0) > 0)
+        active.length === 0 || active.every((l: any) => isLineDelivered({
+            quantity: Number(l.quantity),
+            qty_received: Number(l.qty_received ?? 0),
+            qty_cancelled: Number(l.qty_cancelled ?? 0),
+            unit: l.unit ?? null,
+            category: l.erp_master_items?.category ?? null,
+            is_cancelled: l.is_cancelled ?? false,
+        }))
+    const anyDelivered = active.some((l: any) => Number(l.qty_received ?? 0) > 0)
     const delivery_status = allDelivered
         ? 'delivered'
         : anyDelivered

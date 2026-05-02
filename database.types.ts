@@ -869,6 +869,8 @@ export type Database = {
       }
       erp_purchase_order_lines: {
         Row: {
+          cancelled_at: string | null
+          cancelled_reason: string | null
           estimated_unit_price: number | null
           id: string
           is_cancelled: boolean
@@ -878,6 +880,7 @@ export type Database = {
           notes: string | null
           order_id: string
           provider_id: string | null
+          qty_cancelled: number
           qty_received: number
           quantity: number
           raw_text: string
@@ -885,6 +888,8 @@ export type Database = {
           unit: string | null
         }
         Insert: {
+          cancelled_at?: string | null
+          cancelled_reason?: string | null
           estimated_unit_price?: number | null
           id?: string
           is_cancelled?: boolean
@@ -894,6 +899,7 @@ export type Database = {
           notes?: string | null
           order_id: string
           provider_id?: string | null
+          qty_cancelled?: number
           qty_received?: number
           quantity: number
           raw_text: string
@@ -901,6 +907,8 @@ export type Database = {
           unit?: string | null
         }
         Update: {
+          cancelled_at?: string | null
+          cancelled_reason?: string | null
           estimated_unit_price?: number | null
           id?: string
           is_cancelled?: boolean
@@ -910,6 +918,7 @@ export type Database = {
           notes?: string | null
           order_id?: string
           provider_id?: string | null
+          qty_cancelled?: number
           qty_received?: number
           quantity?: number
           raw_text?: string

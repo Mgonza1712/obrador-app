@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { Package, MessageCircle, Globe, ChevronRight, CheckCircle2, Clock, XCircle, Truck, PackageCheck, PackageX, Filter } from 'lucide-react'
+import { Package, MessageCircle, Globe, ChevronRight, CheckCircle2, Clock, XCircle, Truck, PackageCheck, PackageX, Filter, AlertTriangle } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import type { OrderSummary } from '@/app/actions/pedidos'
 
@@ -280,6 +280,16 @@ export default function OrdersTable({ orders }: { orders: OrderSummary[] }) {
                                             <StatusBadge status={order.status} />
                                             {order.status === 'sent' && order.delivery_status !== 'pending' && (
                                                 <DeliveryBadge status={order.delivery_status} />
+                                            )}
+                                            {order.linked_documents_count > 0 && (
+                                                <Link
+                                                    href={`/pedidos/${order.id}?tab=discrepancias`}
+                                                    className="inline-flex w-fit items-center gap-1 rounded border border-orange-200 bg-orange-50 px-1.5 py-0.5 text-[10px] font-medium text-orange-700 transition-colors hover:bg-orange-100"
+                                                >
+                                                    <AlertTriangle className="h-2.5 w-2.5" />
+                                                    Discrepancias
+                                                    <span className="text-orange-500">{order.linked_documents_count}</span>
+                                                </Link>
                                             )}
                                         </div>
                                     </td>

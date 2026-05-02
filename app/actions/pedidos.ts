@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { revalidatePath } from 'next/cache'
+import { getQuantityToCancel, isLineDelivered } from '@/lib/orders/deliveryTolerance'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ export interface OrderSummary {
     is_template: boolean
     recurrence_label: string | null
     next_run_at: string | null
+    linked_documents_count: number
 }
 
 export interface OrderLineDetail {
@@ -51,7 +53,11 @@ export interface OrderLineDetail {
     master_item_id: string | null
     master_item_name: string | null
     master_item_base_unit: string | null
+    master_item_category: string | null
     qty_received: number
+    qty_cancelled: number
+    cancelled_reason: string | null
+    cancelled_at: string | null
     is_cancelled: boolean
 }
 
@@ -99,9 +105,14 @@ export async function getOrders(): Promise<OrderSummary[]> {
         .select('order_id, is_matched, erp_master_items(category), erp_providers(name)')
         .in('order_id', orderIds)
 
-    const countsByOrder: Record<string, { total: number; matched: number; categories: Set<string>; providers: Set<string> }> = {}
+    const { data: linkedDocs } = await (supabase as any)
+        .from('erp_order_documents')
+        .select('order_id')
+        .in('order_id', orderIds)
+
+    const countsByOrder: Record<string, { total: number; matched: number; categories: Set<string>; providers: Set<string>; linkedDocs: number }> = {}
     for (const id of orderIds) {
-        countsByOrder[id] = { total: 0, matched: 0, categories: new Set(), providers: new Set() }
+        countsByOrder[id] = { total: 0, matched: 0, categories: new Set(), providers: new Set(), linkedDocs: 0 }
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const l of (lines ?? []) as any[]) {
@@ -111,6 +122,9 @@ export async function getOrders(): Promise<OrderSummary[]> {
         if (l.is_matched) entry.matched += 1
         if (l.erp_master_items?.category) entry.categories.add(l.erp_master_items.category)
         if (l.erp_providers?.name) entry.providers.add(l.erp_providers.name)
+    }
+    for (const d of (linkedDocs ?? []) as any[]) {
+        if (countsByOrder[d.order_id]) countsByOrder[d.order_id].linkedDocs += 1
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -135,6 +149,7 @@ export async function getOrders(): Promise<OrderSummary[]> {
         recurrence_label: (o as any).recurrence_label ?? null,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         next_run_at: (o as any).next_run_at ?? null,
+        linked_documents_count: countsByOrder[o.id]?.linkedDocs ?? 0,
     }))
 }
 
@@ -155,10 +170,11 @@ export async function getOrderDetail(orderId: string): Promise<OrderDetail | nul
         .from('erp_purchase_order_lines')
         .select(`
             id, raw_text, quantity, unit, estimated_unit_price, is_matched,
-            match_confidence, notes, sort_order, qty_received, is_cancelled,
+            match_confidence, notes, sort_order, qty_received, qty_cancelled,
+            cancelled_reason, cancelled_at, is_cancelled,
             provider_id, master_item_id,
             erp_providers(name, channel, phone, email),
-            erp_master_items(official_name, base_unit)
+            erp_master_items(official_name, category, base_unit)
         `)
         .eq('order_id', orderId)
         .order('sort_order', { ascending: true, nullsFirst: false })
@@ -192,7 +208,10 @@ export async function getOrderDetail(orderId: string): Promise<OrderDetail | nul
             match_confidence: l.match_confidence,
             notes: l.notes,
             sort_order: l.sort_order,
-            qty_received: l.qty_received ?? 0,
+            qty_received: Number(l.qty_received ?? 0),
+            qty_cancelled: Number(l.qty_cancelled ?? 0),
+            cancelled_reason: l.cancelled_reason ?? null,
+            cancelled_at: l.cancelled_at ?? null,
             is_cancelled: l.is_cancelled ?? false,
             provider_id: l.provider_id,
             provider_name: l.erp_providers?.name ?? null,
@@ -201,6 +220,7 @@ export async function getOrderDetail(orderId: string): Promise<OrderDetail | nul
             provider_email: l.erp_providers?.email ?? null,
             master_item_id: l.master_item_id,
             master_item_name: l.erp_master_items?.official_name ?? null,
+            master_item_category: l.erp_master_items?.category ?? null,
             master_item_base_unit: l.erp_master_items?.base_unit ?? null,
         })),
     }
@@ -623,15 +643,22 @@ function computeNextRunAt(cronExpr: string): string {
 async function recalcDeliveryStatus(supabase: any, orderId: string): Promise<void> {
     const { data: lines } = await supabase
         .from('erp_purchase_order_lines')
-        .select('quantity, qty_received, is_cancelled')
+        .select('quantity, qty_received, qty_cancelled, unit, is_cancelled, erp_master_items(category, base_unit)')
         .eq('order_id', orderId)
 
     if (!lines || lines.length === 0) return
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const active = (lines as any[]).filter((l) => !l.is_cancelled)
-    const allDelivered = active.length === 0 || active.every((l) => (l.qty_received ?? 0) >= l.quantity)
-    const anyDelivered = active.some((l) => (l.qty_received ?? 0) > 0)
+    const allDelivered = active.length === 0 || active.every((l) => isLineDelivered({
+        quantity: Number(l.quantity),
+        qty_received: Number(l.qty_received ?? 0),
+        qty_cancelled: Number(l.qty_cancelled ?? 0),
+        unit: l.unit ?? null,
+        category: l.erp_master_items?.category ?? null,
+        is_cancelled: l.is_cancelled ?? false,
+    }))
+    const anyDelivered = active.some((l) => Number(l.qty_received ?? 0) > 0)
 
     const delivery_status: DeliveryStatus = allDelivered ? 'delivered' : anyDelivered ? 'partially_delivered' : 'pending'
 
@@ -713,13 +740,46 @@ export async function cancelPendingLines(
     if (lineIds.length === 0) return { success: true }
     const supabase = await createClient()
 
-    const { error } = await (supabase as any)
+    const sb = supabase as any
+    const { data: lines, error: fetchError } = await sb
         .from('erp_purchase_order_lines')
-        .update({ is_cancelled: true })
+        .select('id, quantity, qty_received, qty_cancelled, unit, is_cancelled, erp_master_items(category, base_unit)')
         .eq('order_id', orderId)
         .in('id', lineIds)
 
-    if (error) return { success: false, error: error.message }
+    if (fetchError) return { success: false, error: fetchError.message }
+
+    for (const line of (lines ?? []) as any[]) {
+        const qtyReceived = Number(line.qty_received ?? 0)
+        const pendingQty = getQuantityToCancel({
+            quantity: Number(line.quantity),
+            qty_received: qtyReceived,
+            qty_cancelled: Number(line.qty_cancelled ?? 0),
+            unit: line.unit ?? null,
+            category: line.erp_master_items?.category ?? null,
+            is_cancelled: line.is_cancelled ?? false,
+        })
+        const patch = qtyReceived > 0
+            ? {
+                qty_cancelled: pendingQty,
+                cancelled_reason: 'Proveedor no entregara el pendiente',
+                cancelled_at: new Date().toISOString(),
+            }
+            : {
+                is_cancelled: true,
+                qty_cancelled: pendingQty,
+                cancelled_reason: 'Linea no entregada',
+                cancelled_at: new Date().toISOString(),
+            }
+
+        const { error } = await sb
+            .from('erp_purchase_order_lines')
+            .update(patch)
+            .eq('order_id', orderId)
+            .eq('id', line.id)
+
+        if (error) return { success: false, error: error.message }
+    }
 
     await recalcDeliveryStatus(supabase as any, orderId)
 

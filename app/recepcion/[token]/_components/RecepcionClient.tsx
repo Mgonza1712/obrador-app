@@ -24,6 +24,7 @@ import {
 import type { VenueInfo, PendingOrder, PendingOrderLine } from '@/app/actions/recepcion'
 import { anonRegisterDelivery } from '@/app/actions/recepcion'
 import { DocumentScanner } from '@/app/scan/components/DocumentScanner'
+import { getPendingQuantity, isLinePending } from '@/lib/orders/deliveryTolerance'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -222,9 +223,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     function handleGoManual() {
         if (!selectedOrder) return
         const qtys: Record<string, number> = {}
-        for (const l of selectedOrder.lines) {
-            qtys[l.id] = Math.max(0, l.quantity - l.qty_received)
-        }
+        for (const l of selectedOrder.lines) qtys[l.id] = getPendingQuantity(l)
         setManualQtys(qtys)
         setStep('manual-qty')
     }
@@ -313,7 +312,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         if (!selectedOrder) return
         const received = Object.entries(manualQtys).map(([line_id, qty_received]) => ({
             line_id,
-            qty_received,
+            qty_received: (selectedOrder.lines.find((l) => l.id === line_id)?.qty_received ?? 0) + qty_received,
         }))
         startTransition(async () => {
             const result = await anonRegisterDelivery(
@@ -531,7 +530,7 @@ function OrderCard({
 }) {
     const providersLabel =
         order.providers.length > 0 ? order.providers.join(', ') : 'Proveedor desconocido'
-    const pendingLines = order.lines.filter((l) => l.qty_received < l.quantity)
+    const pendingLines = order.lines.filter(isLinePending)
     const sentDate = order.sent_at
         ? new Date(order.sent_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
         : null
@@ -693,7 +692,7 @@ function ReceptionView({
     onSubmit: () => void
     onGoManual: () => void
 }) {
-    const pendingLines = order.lines.filter((l) => l.qty_received < l.quantity)
+    const pendingLines = order.lines.filter(isLinePending)
 
     return (
         <div className="space-y-5">
@@ -920,7 +919,7 @@ function NoOrderConfirmView({
 }
 
 function OrderLineRow({ line }: { line: PendingOrderLine }) {
-    const remaining = line.quantity - line.qty_received
+    const remaining = getPendingQuantity(line)
     const unit = line.unit ? ` ${line.unit}` : ''
     return (
         <div className="flex items-center justify-between gap-2 text-sm">
@@ -960,7 +959,7 @@ function ManualQtyView({
     onBack: () => void
     onSubmit: () => void
 }) {
-    const pendingLines = order.lines.filter((l) => l.qty_received < l.quantity)
+    const pendingLines = order.lines.filter(isLinePending)
 
     function updateQty(lineId: string, value: string) {
         const n = parseFloat(value)
@@ -985,7 +984,7 @@ function ManualQtyView({
 
             <div className="space-y-3">
                 {pendingLines.map((line) => {
-                    const remaining = line.quantity - line.qty_received
+                    const remaining = getPendingQuantity(line)
                     return (
                         <div key={line.id} className="rounded-lg border bg-card p-3">
                             <p className="mb-2 text-sm font-medium">{line.raw_text}</p>
@@ -997,7 +996,7 @@ function ManualQtyView({
                                     <Input
                                         type="number"
                                         min={0}
-                                        max={line.quantity}
+                                        max={remaining}
                                         step={1}
                                         value={manualQtys[line.id] ?? remaining}
                                         onChange={(e) => updateQty(line.id, e.target.value)}
