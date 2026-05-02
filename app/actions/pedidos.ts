@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
 import { revalidatePath } from 'next/cache'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -957,17 +958,18 @@ export interface DiscrepancyReport {
 export async function matchOrderToDocument(
     documentId: string
 ): Promise<{ orderId: string | null; score: number | null }> {
-    const supabase = await createClient()
-    const sb = supabase as any
+    // Use service client — called from both server actions (user session) and API routes (no session)
+    const sb = createServiceClient() as any
 
-    // Get document provider
+    // Get document provider and type
     const { data: doc } = await sb
         .from('erp_documents')
-        .select('id, provider_id')
+        .select('id, provider_id, doc_type')
         .eq('id', documentId)
         .single()
 
     if (!doc?.provider_id) return { orderId: null, score: null }
+    const effectiveDocType: string = (doc.doc_type ?? '').toLowerCase()
 
     // Get document lines that have a master_item_id
     const { data: docLines } = await sb
@@ -1042,6 +1044,36 @@ export async function matchOrderToDocument(
             match_score: bestScore,
             linked_by: 'auto',
         })
+
+        // For Albaranes: propagate quantities to order lines and recalculate delivery_status
+        if (effectiveDocType === 'albaran') {
+            const docQtyByItem = new Map<string, number>()
+            for (const dl of docLines as any[]) {
+                if (dl.master_item_id) {
+                    docQtyByItem.set(dl.master_item_id, (docQtyByItem.get(dl.master_item_id) ?? 0) + Number(dl.quantity))
+                }
+            }
+
+            const { data: orderLinesForQty } = await sb
+                .from('erp_purchase_order_lines')
+                .select('id, master_item_id, qty_received')
+                .eq('order_id', bestOrderId)
+                .eq('is_cancelled', false)
+                .not('master_item_id', 'is', null)
+
+            if (orderLinesForQty) {
+                for (const ol of orderLinesForQty as any[]) {
+                    const docQty = docQtyByItem.get(ol.master_item_id)
+                    if (docQty != null) {
+                        await sb
+                            .from('erp_purchase_order_lines')
+                            .update({ qty_received: (Number(ol.qty_received) || 0) + docQty })
+                            .eq('id', ol.id)
+                    }
+                }
+                await recalcDeliveryStatus(sb, bestOrderId)
+            }
+        }
     }
 
     revalidatePath(`/pedidos/${bestOrderId}`)

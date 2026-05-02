@@ -33,6 +33,13 @@ Fecha de verificación: 2026-04-09.
 
 3) **Packaging vive en el alias** (por proveedor)
 
+4) **Guardia de fecha: el precio activo no retrocede en el tiempo** *(implementado 2026-05-02)*
+
+- Al procesar un documento, si ya existe un precio `active` para el mismo `(master_item_id, provider_id)` con `effective_date` más reciente que el documento entrante, el nuevo precio se inserta directamente como `archived` (registro histórico) **sin tocar el activo**.
+- Esto impide que un albarán antiguo cargado tardíamente sobreescriba precios derivados de documentos más recientes.
+- Aplica en ambos codepaths: `procesar_factura_completa_v4` (auto-aprobación) y `approveDocument` (revisión humana).
+- Regla simple: `document_date_nuevo < effective_date_activo` → insertar como `archived`, `is_preferred=false`.
+
 - `formato_compra` (Caja, Barril, etc.)
 - `envases_por_formato`
 - `contenido_por_envase`
@@ -106,6 +113,7 @@ En el flujo estándar, `procesar_factura_completa_v4`:
 - crea/usa `erp_master_items` cuando el extractor ya entrega `master_item_id` (producto conocido)
 - inserta líneas en `erp_purchase_lines`
 - para líneas `auto_approved` con precio, inserta/archiva `erp_price_history` (status `active` o `quote` según `doc_type`)
+- aplica guardia de fecha (invariante 4): documento más antiguo que el activo → inserta como `archived`
 
 ### 2) Revisión humana (panel `/admin/revision`)
 
@@ -117,6 +125,7 @@ Al aprobar un documento, `approveDocument`:
 - respeta presupuestos:
   - si `activate_prices=false` → escribe `quote`
   - si `activate_prices=true` → escribe `active`
+- aplica guardia de fecha (invariante 4): documento más antiguo que el activo → inserta como `archived`
 
 ### 3) Edición posterior en historial de documentos (`/documentos`)
 

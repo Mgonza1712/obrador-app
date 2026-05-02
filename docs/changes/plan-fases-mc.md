@@ -1,7 +1,12 @@
 # Plan de Fases MC — Modulo de Compras Rediseñado
 
-**Fecha:** 2026-04-23 (actualizado 2026-04-29)
-**Estado:** MC-1 COMPLETA. MC-2 COMPLETA. MC-3 COMPLETA + fixes post-sesion. MC-4 COMPLETA. Proximo: MC-5.
+**Fecha:** 2026-04-23 (actualizado 2026-05-02)
+**Estado:** MC-1 COMPLETA. MC-2 COMPLETA. MC-3 COMPLETA + fixes post-sesion. MC-4 COMPLETA. MC-5 en progreso. Fix transversal aplicado: guardia de fecha en price_history.
+
+### Fixes transversales (2026-05-02)
+- **Guardia de fecha en price_history**: al procesar un documento, si ya existe un precio `active` con `effective_date` más reciente, el nuevo precio se inserta como `archived` sin tocar el activo. Aplica en `procesar_factura_completa_v4` (SQL) y `approveDocument` (TS). Detectado al cargar un albarán de sep-2025 que sobreescribía precios de oct-2025.
+- **Bug corregido en SQL v4**: typo `v_local_ombre` → `v_local_nombre` en el bloque de asignación de venue para Facturas. Impedía que las facturas asignaran venue por `local_receptor` aunque el LLM lo extrajera correctamente.
+- **Pendiente MC-5**: matchOrderToDocument desde approveDocument + actualización qty_received para albaranes + venue_id desde QR token. Configurar llamada en n8n tras procesar_factura_completa_v4.
 
 ### MC-4 completada (2026-04-29)
 - **`matchOrderToDocument(documentId)`**: server action en `app/actions/pedidos.ts`. Busca pedidos `status=sent` + `delivery_status IN (pending, partially_delivered)` del mismo proveedor. Score = lineas doc con master_item_id en pedido / total lineas doc. Vincula si score > 0.5.

@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
+import { matchOrderToDocument } from '@/app/actions/pedidos'
 
 // --- Interfaces for the payload ---
 interface DocumentRevisionPayload {
@@ -233,48 +234,75 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
                 // Buscar el precio más reciente (activo o archivado) para comparar
                 const { data: latestPrice } = await supabase
                     .from('erp_price_history')
-                    .select('id, unit_price, is_preferred, status')
+                    .select('id, unit_price, is_preferred, status, effective_date')
                     .eq('master_item_id', finalMasterItemId)
                     .eq('provider_id', finalProviderId)
                     .order('effective_date', { ascending: false })
                     .limit(1)
                     .maybeSingle()
 
+                // Guardia de fecha: documento más antiguo que el precio vigente no lo sobreescribe
+                const newDocDate = effectiveDate ? new Date(effectiveDate) : null
+                const latestPriceDate = (latestPrice as any)?.effective_date ? new Date((latestPrice as any).effective_date) : null
+                const isNewDocMoreRecent = !latestPriceDate || !newDocDate || newDocDate >= latestPriceDate
+
                 if (latestPrice && Math.abs(Number(latestPrice.unit_price) - (line.unit_price ?? 0)) < 0.001) {
-                    // Precio sin cambios: actualizar metadata (costos corregidos, is_preferred, document_id, iva_percent)
-                    const { data: activePrice } = await supabase
-                        .from('erp_price_history')
-                        .select('id, is_preferred')
-                        .eq('master_item_id', finalMasterItemId)
-                        .eq('provider_id', finalProviderId)
-                        .eq('status', priceHistoryStatus)
-                        .maybeSingle()
+                    // Precio sin cambios: actualizar metadata solo si el documento es más reciente
+                    if (isNewDocMoreRecent) {
+                        const { data: activePrice } = await supabase
+                            .from('erp_price_history')
+                            .select('id, is_preferred')
+                            .eq('master_item_id', finalMasterItemId)
+                            .eq('provider_id', finalProviderId)
+                            .eq('status', priceHistoryStatus)
+                            .maybeSingle()
 
-                    if (activePrice) {
-                        const updates: Record<string, unknown> = {
-                            document_id: payload.document.id,
-                            cost_per_base_unit: line.unit_price / (effectiveEnvases * effectiveContenido),
-                            cost_per_packaged_unit: line.unit_price / effectiveEnvases,
-                        }
-                        if (line.iva_percent != null) updates.iva_percent = line.iva_percent
+                        if (activePrice) {
+                            const updates: Record<string, unknown> = {
+                                document_id: payload.document.id,
+                                cost_per_base_unit: line.unit_price / (effectiveEnvases * effectiveContenido),
+                                cost_per_packaged_unit: line.unit_price / effectiveEnvases,
+                            }
+                            if (line.iva_percent != null) updates.iva_percent = line.iva_percent
 
-                        // Solo promover is_preferred, nunca degradar:
-                        // el default false del UI para productos conocidos no indica intención del usuario de quitarlo.
-                        if (line.is_preferred && !activePrice.is_preferred) {
-                            updates.is_preferred = true
+                            // Solo promover is_preferred, nunca degradar:
+                            // el default false del UI para productos conocidos no indica intención del usuario de quitarlo.
+                            if (line.is_preferred && !activePrice.is_preferred) {
+                                updates.is_preferred = true
+                                await supabase
+                                    .from('erp_price_history')
+                                    .update({ is_preferred: false })
+                                    .eq('master_item_id', finalMasterItemId)
+                                    .eq('status', priceHistoryStatus)
+                                    .neq('id', activePrice.id)
+                            }
+
                             await supabase
                                 .from('erp_price_history')
-                                .update({ is_preferred: false })
-                                .eq('master_item_id', finalMasterItemId)
-                                .eq('status', priceHistoryStatus)
-                                .neq('id', activePrice.id)
+                                .update(updates)
+                                .eq('id', activePrice.id)
                         }
-
-                        await supabase
-                            .from('erp_price_history')
-                            .update(updates)
-                            .eq('id', activePrice.id)
                     }
+                    continue
+                }
+
+                // Documento más antiguo que el precio vigente: guardar como registro histórico sin tocar el activo
+                if (!isNewDocMoreRecent) {
+                    await supabase
+                        .from('erp_price_history')
+                        .insert({
+                            master_item_id: finalMasterItemId,
+                            provider_id: finalProviderId,
+                            venue_id: venueId,
+                            unit_price: line.unit_price,
+                            cost_per_packaged_unit: line.unit_price / effectiveEnvases,
+                            cost_per_base_unit: line.unit_price / (effectiveEnvases * effectiveContenido),
+                            effective_date: effectiveDate,
+                            status: 'archived',
+                            is_preferred: false,
+                            iva_percent: line.iva_percent ?? null,
+                            document_id: payload.document.id,
+                        })
                     continue
                 }
 
@@ -437,6 +465,11 @@ export async function approveDocument(payload: DocumentRevisionPayload): Promise
         if (payload.document.doc_type?.toLowerCase() === 'albaran') {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             await (supabase as any).rpc('trigger_conciliacion_for_albaran', { p_albaran_id: payload.document.id })
+        }
+
+        // ── 7. Auto-link to purchase order (Albaran/Factura only, not Presupuesto) ──
+        if (payload.document.doc_type?.toLowerCase() !== 'presupuesto') {
+            await matchOrderToDocument(payload.document.id)
         }
 
         revalidatePath('/admin/revision')
