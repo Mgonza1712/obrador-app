@@ -3,7 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { revalidatePath } from 'next/cache'
-import { getQuantityToCancel, isLineDelivered } from '@/lib/orders/deliveryTolerance'
+import { AUTO_CLOSED_REMAINDER_REASON, getAutoClosePendingQuantity, getPendingQuantity, getQuantityToCancel, isLineDelivered } from '@/lib/orders/deliveryTolerance'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -668,6 +668,79 @@ async function recalcDeliveryStatus(supabase: any, orderId: string): Promise<voi
         .eq('id', orderId)
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function autoCloseToleratedRemainders(supabase: any, orderId: string, lineIds?: string[]): Promise<void> {
+    let query = supabase
+        .from('erp_purchase_order_lines')
+        .select('id, quantity, qty_received, qty_cancelled, unit, is_cancelled, erp_master_items(category, base_unit)')
+        .eq('order_id', orderId)
+
+    if (lineIds && lineIds.length > 0) {
+        query = query.in('id', lineIds)
+    }
+
+    const { data: lines } = await query
+    if (!lines || lines.length === 0) return
+
+    const now = new Date().toISOString()
+    for (const line of lines as any[]) {
+        const autoCloseQty = getAutoClosePendingQuantity({
+            quantity: Number(line.quantity),
+            qty_received: Number(line.qty_received ?? 0),
+            qty_cancelled: Number(line.qty_cancelled ?? 0),
+            unit: line.unit ?? null,
+            category: line.erp_master_items?.category ?? null,
+            is_cancelled: line.is_cancelled ?? false,
+        })
+
+        if (autoCloseQty <= 0) continue
+
+        await supabase
+            .from('erp_purchase_order_lines')
+            .update({
+                qty_cancelled: Number(line.qty_cancelled ?? 0) + autoCloseQty,
+                cancelled_reason: AUTO_CLOSED_REMAINDER_REASON,
+                cancelled_at: now,
+            })
+            .eq('order_id', orderId)
+            .eq('id', line.id)
+    }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function syncCancelledOrderStatus(supabase: any, orderId: string): Promise<void> {
+    const { data: lines } = await supabase
+        .from('erp_purchase_order_lines')
+        .select('quantity, qty_received, qty_cancelled, unit, is_cancelled, erp_master_items(category, base_unit)')
+        .eq('order_id', orderId)
+
+    if (!lines || lines.length === 0) return
+
+    const allClosedWithoutReceipt = (lines as any[]).every((line) => {
+        const qtyReceived = Number(line.qty_received ?? 0)
+        if (qtyReceived > 0) return false
+
+        return line.is_cancelled || getPendingQuantity({
+            quantity: Number(line.quantity),
+            qty_received: qtyReceived,
+            qty_cancelled: Number(line.qty_cancelled ?? 0),
+            unit: line.unit ?? null,
+            category: line.erp_master_items?.category ?? null,
+            is_cancelled: line.is_cancelled ?? false,
+        }) <= 0
+    })
+
+    if (!allClosedWithoutReceipt) return
+
+    await supabase
+        .from('erp_purchase_orders')
+        .update({
+            status: 'cancelled',
+            delivery_status: 'pending',
+        })
+        .eq('id', orderId)
+}
+
 export async function registerDelivery(
     orderId: string,
     receivedLines: { line_id: string; qty_received: number; notes?: string | null }[],
@@ -726,7 +799,9 @@ export async function registerDelivery(
         if (updateErr) return { success: false, error: updateErr.message }
     }
 
+    await autoCloseToleratedRemainders(sb, orderId, receivedLines.map((l) => l.line_id))
     await recalcDeliveryStatus(sb, orderId)
+    await syncCancelledOrderStatus(sb, orderId)
 
     revalidatePath(`/pedidos/${orderId}`)
     revalidatePath('/pedidos')
@@ -762,7 +837,7 @@ export async function cancelPendingLines(
         const patch = qtyReceived > 0
             ? {
                 qty_cancelled: pendingQty,
-                cancelled_reason: 'Proveedor no entregara el pendiente',
+                cancelled_reason: AUTO_CLOSED_REMAINDER_REASON,
                 cancelled_at: new Date().toISOString(),
             }
             : {
@@ -782,6 +857,7 @@ export async function cancelPendingLines(
     }
 
     await recalcDeliveryStatus(supabase as any, orderId)
+    await syncCancelledOrderStatus(supabase as any, orderId)
 
     revalidatePath(`/pedidos/${orderId}`)
     revalidatePath('/pedidos')
@@ -792,7 +868,29 @@ export async function cancelPendingLines(
 
 export async function updateOrderVenue(orderId: string, venueId: string | null): Promise<ActionResult> {
     const supabase = await createClient()
-    const { error } = await (supabase as any)
+    const sb = supabase as any
+
+    const { data: order } = await sb
+        .from('erp_purchase_orders')
+        .select('status')
+        .eq('id', orderId)
+        .maybeSingle()
+
+    if (!order) return { success: false, error: 'Pedido no encontrado' }
+
+    if (order.status === 'sent') {
+        const { data: lines } = await sb
+            .from('erp_purchase_order_lines')
+            .select('qty_received')
+            .eq('order_id', orderId)
+
+        const hasReceipts = ((lines ?? []) as any[]).some((line) => Number(line.qty_received ?? 0) > 0)
+        if (hasReceipts) {
+            return { success: false, error: 'No se puede cambiar el local de un pedido con recepciones registradas' }
+        }
+    }
+
+    const { error } = await sb
         .from('erp_purchase_orders')
         .update({ venue_id: venueId })
         .eq('id', orderId)
@@ -1131,6 +1229,7 @@ export async function matchOrderToDocument(
                             .eq('id', ol.id)
                     }
                 }
+                await autoCloseToleratedRemainders(sb, bestOrderId, (orderLinesForQty as any[]).map((l) => l.id))
                 await recalcDeliveryStatus(sb, bestOrderId)
             }
         }

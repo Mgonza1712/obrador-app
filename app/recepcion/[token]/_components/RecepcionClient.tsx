@@ -202,6 +202,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
         reader.onload = (ev) => {
             const dataUrl = ev.target?.result as string
             setPages([{ dataUrl }])
+            setErrorMsg('')
         }
         reader.readAsDataURL(file)
         e.target.value = ''
@@ -210,6 +211,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     function handleScannerCapture(processedDataUrl: string) {
         const ctx = scanContext
         setPages(prev => [...prev, { dataUrl: processedDataUrl }])
+        setErrorMsg('')
         setScanContext(null)
         if (ctx === 'no-order') {
             setStep('no-order-confirm')
@@ -229,6 +231,11 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
     }
 
     async function handleSubmitRecepcion() {
+        if (pages.length === 0) {
+            setErrorMsg('Falta adjuntar la foto del documento. Si no llegó documento, usa "Registrar cantidades manualmente".')
+            return
+        }
+
         setIsSubmitting(true)
         setErrorMsg('')
 
@@ -249,12 +256,6 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
             if (!res.ok || !data.success) {
                 setErrorMsg(data.error ?? 'Error al enviar la recepción')
                 setStep('error')
-                return
-            }
-
-            if (pages.length === 0) {
-                setSuccessMsg('Observaciones registradas.')
-                setStep('success')
                 return
             }
 
@@ -422,6 +423,7 @@ export default function RecepcionClient({ token, venue, initialOrders }: Props) 
                     onRemovePage={handleRemovePage}
                     observations={observations}
                     setObservations={setObservations}
+                    errorMsg={errorMsg}
                     isSubmitting={isSubmitting}
                     onBack={() => setStep('orders')}
                     onSubmit={handleSubmitRecepcion}
@@ -672,6 +674,7 @@ function ReceptionView({
     onRemovePage,
     observations,
     setObservations,
+    errorMsg,
     isSubmitting,
     onBack,
     onSubmit,
@@ -687,6 +690,7 @@ function ReceptionView({
     onRemovePage: (index: number) => void
     observations: string
     setObservations: (v: string) => void
+    errorMsg: string
     isSubmitting: boolean
     onBack: () => void
     onSubmit: () => void
@@ -773,7 +777,14 @@ function ReceptionView({
                 />
             </div>
 
-            <Button className="w-full" size="lg" onClick={onSubmit} disabled={isSubmitting}>
+            {errorMsg && (
+                <div className="flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{errorMsg}</span>
+                </div>
+            )}
+
+            <Button className="w-full" size="lg" onClick={onSubmit} disabled={isSubmitting || pages.length === 0}>
                 {isSubmitting ? (
                     <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />

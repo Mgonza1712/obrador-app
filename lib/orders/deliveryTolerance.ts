@@ -26,6 +26,7 @@ const WEIGHT_OR_VOLUME_UNITS = new Set([
 ])
 
 const FRESH_SHORTAGE_TOLERANCE_RATIO = 0.20
+export const AUTO_CLOSED_REMAINDER_REASON = 'Proveedor no entregara el pendiente'
 
 export interface DeliveryLineLike {
     quantity: number
@@ -70,4 +71,16 @@ export function isLinePending(line: DeliveryLineLike): boolean {
 
 export function getQuantityToCancel(line: DeliveryLineLike): number {
     return getPendingQuantity(line)
+}
+
+export function getAutoClosePendingQuantity(line: DeliveryLineLike): number {
+    const quantity = Number(line.quantity ?? 0)
+    const qtyReceived = Number(line.qty_received ?? 0)
+    const pending = getPendingQuantity(line)
+
+    if (line.is_cancelled || quantity <= 0 || qtyReceived <= 0 || pending <= 0) return 0
+    if (!isMeasuredFreshLine(line)) return 0
+    if (pending / quantity > FRESH_SHORTAGE_TOLERANCE_RATIO) return 0
+
+    return pending
 }

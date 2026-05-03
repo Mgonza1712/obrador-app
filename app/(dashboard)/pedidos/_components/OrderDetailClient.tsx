@@ -2,7 +2,7 @@
 
 import { useState, useTransition, useEffect } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
     ArrowLeft, CheckCircle2, Clock, XCircle, MessageCircle, Globe, Mail, Phone,
     Trash2, Loader2, AlertCircle, CheckCircle, Package, AlertTriangle, RefreshCw,
@@ -22,7 +22,7 @@ import AddProductsPanel from './AddProductsPanel'
 import SchedulingPanel from './SchedulingPanel'
 import DiscrepanciasTab from './DiscrepanciasTab'
 import type { OrderDetail, OrderLineDetail, DeliveryStatus, LinkedDocument } from '@/app/actions/pedidos'
-import { getPendingQuantity, getQuantityToCancel, isLineDelivered, isLinePending } from '@/lib/orders/deliveryTolerance'
+import { AUTO_CLOSED_REMAINDER_REASON, getAutoClosePendingQuantity, getPendingQuantity, getQuantityToCancel, isLineDelivered, isLinePending } from '@/lib/orders/deliveryTolerance'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -112,11 +112,22 @@ function DeliveryStatusBadge({ status }: { status: DeliveryStatus }) {
     )
 }
 
-function ChannelBadge({ channel, phone, email }: { channel: string | null; phone?: string | null; email?: string | null }) {
+function ChannelBadge({
+    channel,
+    phone,
+    email,
+    hasProvider = true,
+}: {
+    channel: string | null
+    phone?: string | null
+    email?: string | null
+    hasProvider?: boolean
+}) {
     if (!channel) {
         return (
             <Badge variant="outline" className="text-xs border-amber-200 bg-amber-50 text-amber-700">
-                <AlertTriangle className="mr-1 h-3 w-3" />Sin proveedor
+                <AlertTriangle className="mr-1 h-3 w-3" />
+                {hasProvider ? 'Canal sin configurar' : 'Sin proveedor'}
             </Badge>
         )
     }
@@ -160,6 +171,7 @@ function formatQty(value: number, unit: string | null) {
     const n = value % 1 === 0 ? value.toString() : value.toFixed(3).replace(/\.?0+$/, '')
     return unit ? `${n} ${unit}` : n
 }
+
 
 // ── Inline qty input ──────────────────────────────────────────────────────────
 
@@ -495,7 +507,7 @@ function ProviderGroup({
             <div className="flex items-center justify-between border-b border-border bg-muted/20 px-4 py-3">
                 <div className="flex items-center gap-2">
                     <span className="font-medium text-sm">{providerName}</span>
-                    <ChannelBadge channel={channel} phone={phone} email={email} />
+                    <ChannelBadge channel={channel} phone={phone} email={email} hasProvider={providerName !== 'Sin proveedor'} />
                 </div>
                 {totalEstimated > 0 && (
                     <span className="text-sm tabular-nums text-muted-foreground">Est. {formatEur(totalEstimated)}</span>
@@ -686,6 +698,10 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
     const isDraft = currentStatus === 'draft'
     const isSent = currentStatus === 'sent'
     const showDelivery = isSent
+    const hasAnyReceived = lines.some((l) => l.qty_received > 0)
+    const canChangeVenue = isDraft || (isSent && !hasAnyReceived)
+    const allLinesPendingWithoutReceipt = isSent && !hasAnyReceived && lines.every((l) => !l.is_cancelled && getPendingQuantity(l) > 0)
+    const closePendingButtonLabel = allLinesPendingWithoutReceipt ? 'Cancelar pedido' : 'Cerrar pendientes'
 
     function showToast(type: 'success' | 'error', message: string) {
         setToast({ type, message })
@@ -713,7 +729,7 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                             ? {
                                 ...l,
                                 qty_cancelled: qtyToCancel,
-                                cancelled_reason: 'Proveedor no entregara el pendiente',
+                                cancelled_reason: AUTO_CLOSED_REMAINDER_REASON,
                                 cancelled_at: new Date().toISOString(),
                             }
                             : {
@@ -725,6 +741,10 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                             }
                     })
                     setDeliveryStatus(calcDeliveryStatus(next))
+                    const allClosedWithoutReceipt = next.every((line) =>
+                        line.qty_received <= 0 && (line.is_cancelled || getPendingQuantity(line) <= 0)
+                    )
+                    if (allClosedWithoutReceipt) setCurrentStatus('cancelled')
                     return next
                 })
             } else {
@@ -822,9 +842,31 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
         )
     }
 
-    async function handleVenueChange(newVenueId: string | null) {
+    async function applyVenueChange(newVenueId: string | null) {
         setVenueId(newVenueId)
-        await updateOrderVenue(order.id, newVenueId)
+        const res = await updateOrderVenue(order.id, newVenueId)
+        if (!res.success) {
+            setVenueId(order.venue_id)
+            showToast('error', res.error ?? 'Error al cambiar el local')
+            return
+        }
+        showToast('success', 'Local actualizado')
+    }
+
+    function handleVenueChange(newVenueId: string | null) {
+        if (newVenueId === venueId) return
+
+        const nextVenueName = venues.find((v) => v.id === newVenueId)?.name ?? 'Sin local asignado'
+        if (isSent && !hasAnyReceived) {
+            askConfirm(
+                'Cambiar local del pedido',
+                `Este pedido ya fue enviado pero todavia no tiene recepciones registradas. Confirma que queres cambiarlo a ${nextVenueName}. El QR y las recepciones pendientes pasaran a depender del nuevo local.`,
+                () => { void applyVenueChange(newVenueId) }
+            )
+            return
+        }
+
+        void applyVenueChange(newVenueId)
     }
 
     async function handleProviderNoteBlur(providerKey: string, value: string) {
@@ -841,12 +883,25 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
 
     function handleDeliveryRegistered(
         updates: { line_id: string; qty_received: number; notes: string | null }[],
-        _hadExtras: boolean
+        hadExtras: boolean
     ) {
+        void hadExtras
         // Optimistic update — immediate feedback while router.refresh() fetches fresh server data
+        const now = new Date().toISOString()
         const nextLines = lines.map((l) => {
             const u = updates.find((x) => x.line_id === l.id)
-            return u ? { ...l, qty_received: u.qty_received, notes: u.notes ?? l.notes } : l
+            if (!u) return l
+
+            const updatedLine = { ...l, qty_received: u.qty_received, notes: u.notes ?? l.notes }
+            const autoCloseQty = getAutoClosePendingQuantity(updatedLine)
+            if (autoCloseQty <= 0) return updatedLine
+
+            return {
+                ...updatedLine,
+                qty_cancelled: updatedLine.qty_cancelled + autoCloseQty,
+                cancelled_reason: AUTO_CLOSED_REMAINDER_REASON,
+                cancelled_at: now,
+            }
         })
         setLines(nextLines)
         setDeliveryStatus(calcDeliveryStatus(nextLines))
@@ -874,8 +929,10 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
         if (pendingIds.length === 0) return
 
         askConfirm(
-            'Cancelar líneas pendientes',
-            `¿Cancelar ${pendingIds.length} línea${pendingIds.length !== 1 ? 's' : ''} pendiente${pendingIds.length !== 1 ? 's' : ''}? Esta acción no se puede deshacer.`,
+            allLinesPendingWithoutReceipt ? 'Cancelar pedido' : 'Cerrar líneas pendientes',
+            allLinesPendingWithoutReceipt
+                ? 'Este pedido no tiene recepciones registradas. Si continuás, se cerrarán todas las líneas pendientes y el pedido pasará a estado cancelado.'
+                : `¿Cerrar ${pendingIds.length} línea${pendingIds.length !== 1 ? 's' : ''} pendiente${pendingIds.length !== 1 ? 's' : ''}? Esta acción no se puede deshacer.`,
             () => startTransition(async () => {
                 const res = await cancelPendingLines(order.id, pendingIds)
                 if (res.success) {
@@ -887,7 +944,7 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                                 ? {
                                     ...l,
                                     qty_cancelled: qtyToCancel,
-                                    cancelled_reason: 'Proveedor no entregara el pendiente',
+                                    cancelled_reason: AUTO_CLOSED_REMAINDER_REASON,
                                     cancelled_at: new Date().toISOString(),
                                 }
                                 : {
@@ -899,9 +956,13 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                                 }
                         })
                         setDeliveryStatus(calcDeliveryStatus(next))
+                        const allClosedWithoutReceipt = next.every((line) =>
+                            line.qty_received <= 0 && (line.is_cancelled || getPendingQuantity(line) <= 0)
+                        )
+                        if (allClosedWithoutReceipt) setCurrentStatus('cancelled')
                         return next
                     })
-                    showToast('success', 'Líneas pendientes canceladas')
+                    showToast('success', allLinesPendingWithoutReceipt ? 'Pedido cancelado' : 'Líneas pendientes cerradas')
                 } else {
                     showToast('error', res.error ?? 'Error al cancelar líneas')
                 }
@@ -963,7 +1024,7 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                         {venues.length > 0 && (
                             <div className="mt-1.5 flex items-center gap-1.5">
                                 <MapPin className={`h-3.5 w-3.5 shrink-0 ${isDraft && !venueId ? 'text-amber-500' : 'text-muted-foreground'}`} />
-                                {isDraft ? (
+                                {canChangeVenue ? (
                                     <select
                                         value={venueId ?? ''}
                                         onChange={(e) => handleVenueChange(e.target.value || null)}
@@ -1021,7 +1082,6 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                     )}
                 </div>
             </div>
-
 
             {/* Scheduling panel — only for drafts */}
             {isDraft && (
@@ -1172,7 +1232,7 @@ export default function OrderDetailClient({ order, masterItems, providers, activ
                                     className="text-xs text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
                                 >
                                     <XCircle className="h-3.5 w-3.5" />
-                                    Cancelar pendientes
+                                    {closePendingButtonLabel}
                                 </Button>
                             </>
                         )}

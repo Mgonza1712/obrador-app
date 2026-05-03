@@ -220,8 +220,11 @@ Disponible una vez que el pedido está en estado `sent`.
   - Todas completas → `delivered`
   - Parciales → `partially_delivered`
   - Ninguna → `pending`
-- Para líneas de categorías frescas (`Frutas y Verduras`, `Carnes`, `Pescados y Mariscos`) vendidas por peso o volumen (`kg`, `g`, `l`, `ml`), una diferencia restante menor o igual al `20%` se considera entregada y no sigue apareciendo como pendiente.
+- Para líneas de categorías frescas (`Frutas y Verduras`, `Carnes`, `Pescados y Mariscos`) vendidas por peso o volumen (`kg`, `g`, `l`, `ml`), una diferencia restante menor o igual al `20%` se considera entregada.
+- Cuando esa tolerancia aplica y la línea ya recibió mercadería, el sistema cierra automáticamente el remanente en `qty_cancelled` con motivo `Proveedor no entregara el pendiente`, para que no siga apareciendo en QR ni quede trabajo manual pendiente.
 - Si el proveedor no va a entregar el resto de una línea parcialmente recibida, el usuario puede cerrar solo el pendiente. Ese remanente se guarda en `qty_cancelled`; no se pierde la parte ya recibida.
+- Si un pedido enviado todavía no tiene recepciones registradas, el local puede corregirse manualmente. Una vez que existe recepción, el local ya no debe cambiarse.
+- Si todas las líneas de un pedido enviado se cancelan sin haber recibido mercadería, el pedido pasa a estado `cancelled` y deja de comportarse como pendiente de entrega.
 
 También accessible desde el QR permanente por local (`/recepcion/{venue_token}`) que muestra todos los pedidos pendientes de entrega del local.
 

@@ -28,6 +28,8 @@ Una línea se considera entregada cuando el faltante restante es menor o igual a
 
 Esta tolerancia **no aplica** a productos vendidos por unidad, caja, barril u otros bultos discretos.
 
+Cuando la tolerancia aplica sobre una línea que ya recibió mercadería, el remanente se cierra automáticamente en `qty_cancelled`. No queda solo como regla visual: el sistema lo persiste con `is_cancelled = false` y `cancelled_reason = 'Proveedor no entregara el pendiente'`.
+
 ### 2. Cierre de solo el remanente pendiente
 
 Se agrega en `erp_purchase_order_lines`:
@@ -65,15 +67,16 @@ También se añadió acceso directo a discrepancias desde `/pedidos` cuando exis
 - Menos falsos pendientes en verdulería, carnes y pescados
 - Mejor representación operativa de parciales reales
 - El QR deja de mostrar líneas cuyo remanente fue tolerado o cerrado
+- Las líneas toleradas quedan visibles en detalle como `Restante cerrado` sin requerir acción manual
 - El historial sigue preservando cuánto llegó y cuánto se dejó de esperar
 
-## Migración requerida
+## Migración hecha
 
-Para que el cambio funcione completo en la base real, hay que ejecutar esta migración:
+Para que el cambio funcione completo en la base real, se ejecuto esta migración:
 
 - `supabase/migrations/20260502_mc_delivery_cancelled_remainders.sql`
 
-Sin esa migración, la app intentará leer/escribir columnas que todavía no existen en Supabase.
+Sin esa migración, la app hubiese intentado leer/escribir columnas que todavía no existen en Supabase.
 
 ## No cambios
 

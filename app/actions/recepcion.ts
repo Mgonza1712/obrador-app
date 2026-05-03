@@ -3,7 +3,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createServiceClient } from '@/lib/supabase/service'
 import { revalidatePath } from 'next/cache'
-import { isLineDelivered, isLinePending } from '@/lib/orders/deliveryTolerance'
+import { AUTO_CLOSED_REMAINDER_REASON, getAutoClosePendingQuantity, isLineDelivered, isLinePending } from '@/lib/orders/deliveryTolerance'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -145,6 +145,38 @@ export async function anonRegisterDelivery(
             .update({ qty_received: l.qty_received })
             .eq('id', l.line_id)
             .eq('order_id', orderId)
+        if (error) return { success: false, error: error.message }
+    }
+
+    const { data: updatedLines } = await sb
+        .from('erp_purchase_order_lines')
+        .select('id, quantity, qty_received, qty_cancelled, unit, is_cancelled, erp_master_items(category, base_unit)')
+        .eq('order_id', orderId)
+        .in('id', receivedLines.map((l) => l.line_id))
+
+    const now = new Date().toISOString()
+    for (const line of (updatedLines ?? []) as any[]) {
+        const autoCloseQty = getAutoClosePendingQuantity({
+            quantity: Number(line.quantity),
+            qty_received: Number(line.qty_received ?? 0),
+            qty_cancelled: Number(line.qty_cancelled ?? 0),
+            unit: line.unit ?? null,
+            category: line.erp_master_items?.category ?? null,
+            is_cancelled: line.is_cancelled ?? false,
+        })
+
+        if (autoCloseQty <= 0) continue
+
+        const { error } = await sb
+            .from('erp_purchase_order_lines')
+            .update({
+                qty_cancelled: Number(line.qty_cancelled ?? 0) + autoCloseQty,
+                cancelled_reason: AUTO_CLOSED_REMAINDER_REASON,
+                cancelled_at: now,
+            })
+            .eq('id', line.id)
+            .eq('order_id', orderId)
+
         if (error) return { success: false, error: error.message }
     }
 

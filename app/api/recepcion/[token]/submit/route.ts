@@ -27,6 +27,13 @@ export async function POST(
     const observations: string | null = body.observations?.trim() || null
     const hasPhoto: boolean = !!body.has_photo
 
+    if (!hasPhoto) {
+        return NextResponse.json(
+            { success: false, error: 'Falta adjuntar la foto del documento. Si no llegó documento, usa el flujo de cantidades manuales.' },
+            { status: 400 }
+        )
+    }
+
     // Verify order belongs to venue (if provided)
     if (orderId) {
         const { data: order } = await sb
@@ -53,14 +60,6 @@ export async function POST(
                 scan_submitted_at: new Date().toISOString(),
                 ...(observations ? { notes: observations } : {}),
             })
-            .eq('id', orderId)
-
-        revalidatePath(`/pedidos/${orderId}`)
-        revalidatePath('/pedidos')
-    } else if (orderId && observations) {
-        await sb
-            .from('erp_purchase_orders')
-            .update({ notes: observations })
             .eq('id', orderId)
 
         revalidatePath(`/pedidos/${orderId}`)
