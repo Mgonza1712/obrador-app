@@ -192,6 +192,10 @@ export default function AddProductsPanel({ orderId, masterItems, providers, acti
                     notes: null,
                     sort_order: null,
                     qty_received: 0,
+                    qty_cancelled: 0,
+                    cancelled_reason: null,
+                    cancelled_at: null,
+                    master_item_category: null,
                     is_cancelled: false,
                 }
                 onAdded([newLine])
